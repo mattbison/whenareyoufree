@@ -527,6 +527,7 @@ const App = () => {
     const slots = {};
     const totalUsers = Object.keys(allUsersAvailability).length;
     if (totalUsers === 0) return [];
+
     Object.values(allUsersAvailability).forEach((userData) => {
       userData.slots?.forEach((slot) => {
         if (slot.type === "available") {
@@ -536,12 +537,15 @@ const App = () => {
         }
       });
     });
+
     const bestHourlySlots = Object.entries(slots)
       .filter(([id, count]) => count === totalUsers)
       .map(([id]) => id.split("T")[0]);
+
     const uniqueDates = [...new Set(bestHourlySlots)];
+
     return uniqueDates
-      .map((dateString) => new Date(dateString))
+      .map((dateString) => new Date(dateString.replace(/-/g, "/")))
       .sort((a, b) => a - b);
   }, [allUsersAvailability]);
 
