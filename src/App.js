@@ -22,12 +22,10 @@ import {
   Copy,
   LogOut,
   PlusSquare,
+  CalendarPlus,
 } from "lucide-react";
 
 // --- Firebase Configuration ---
-// FIXED: Reverted to direct keys for CodeSandbox compatibility.
-// For a production deployment on a platform like Netlify,
-// you would replace these with environment variables (e.g., process.env.REACT_APP_API_KEY).
 const firebaseConfig = {
   apiKey: "AIzaSyADkhtS4NSsWXd2tmjHtY5ogTsRcyzpDr0",
   authDomain: "whenareyoufree-a51fa.firebaseapp.com",
@@ -38,7 +36,7 @@ const firebaseConfig = {
   measurementId: "G-5GDTHC0GNV",
 };
 
-// --- Helper Components (Defined outside App to prevent re-creation on render) ---
+// --- Helper Components ---
 
 const WeeklyView = ({
   currentDate,
@@ -48,6 +46,8 @@ const WeeklyView = ({
   handleSlotClick,
   getUsersInSlot,
   handleDayClick,
+  today,
+  showFullDay,
 }) => {
   const daysOfWeek = useMemo(
     () =>
@@ -61,13 +61,15 @@ const WeeklyView = ({
     [currentDate]
   );
 
-  const timeSlots = useMemo(
-    () =>
-      Array(24)
-        .fill(0)
-        .map((_, i) => `${i.toString().padStart(2, "0")}:00`),
-    []
-  );
+  const timeSlots = useMemo(() => {
+    const allHours = Array(24)
+      .fill(0)
+      .map((_, i) => `${i.toString().padStart(2, "0")}:00`);
+    if (showFullDay) {
+      return allHours;
+    }
+    return allHours.slice(8); // Only show from 8 AM onwards
+  }, [showFullDay]);
 
   return (
     <div className="bg-white rounded-lg shadow-md border border-gray-200">
@@ -111,20 +113,25 @@ const WeeklyView = ({
           style={{ minWidth: "700px" }}
         >
           <div className="sticky top-0 left-0 bg-white z-10"></div>
-          {daysOfWeek.map((day, i) => (
-            <div
-              key={i}
-              onClick={() => handleDayClick(day)}
-              className="sticky top-0 bg-white z-10 py-2 border-b-2 border-gray-200 text-center cursor-pointer hover:bg-gray-200 transition-colors"
-            >
-              <p className="font-semibold text-gray-600 text-xs sm:text-sm">
-                {day.toLocaleDateString(undefined, { weekday: "short" })}
-              </p>
-              <p className="text-xl sm:text-2xl font-bold text-gray-800">
-                {day.getDate()}
-              </p>
-            </div>
-          ))}
+          {daysOfWeek.map((day, i) => {
+            const isPast = day < today;
+            return (
+              <div
+                key={i}
+                onClick={() => handleDayClick(day)}
+                className={`sticky top-0 bg-white z-10 py-2 border-b-2 border-gray-200 text-center transition-colors ${
+                  isPast ? "opacity-50" : "cursor-pointer hover:bg-gray-200"
+                }`}
+              >
+                <p className="font-semibold text-gray-600 text-xs sm:text-sm">
+                  {day.toLocaleDateString(undefined, { weekday: "short" })}
+                </p>
+                <p className="text-xl sm:text-2xl font-bold text-gray-800">
+                  {day.getDate()}
+                </p>
+              </div>
+            );
+          })}
 
           {timeSlots.map((time) => (
             <React.Fragment key={time}>
@@ -132,6 +139,7 @@ const WeeklyView = ({
                 {time}
               </div>
               {daysOfWeek.map((day) => {
+                const isPast = day < today;
                 const usersInSlot = getUsersInSlot(day, time);
                 const totalUsersInGroup =
                   Object.keys(allUsersAvailability).length;
@@ -143,7 +151,9 @@ const WeeklyView = ({
                 );
 
                 let bgColor = "bg-gray-50 hover:bg-gray-200";
-                if (isAnyoneUnavailable) {
+                if (isPast) {
+                  bgColor = "bg-gray-200";
+                } else if (isAnyoneUnavailable) {
                   bgColor = "bg-red-200 hover:bg-red-300";
                 } else if (
                   totalUsersInGroup > 0 &&
@@ -160,7 +170,9 @@ const WeeklyView = ({
                   <div
                     key={day.toISOString()}
                     onClick={() => handleSlotClick(day, time)}
-                    className={`h-16 border-t border-l border-gray-200 cursor-pointer transition-colors ${bgColor} p-1`}
+                    className={`h-16 border-t border-l border-gray-200 transition-colors ${bgColor} p-1 ${
+                      isPast ? "pointer-events-none" : "cursor-pointer"
+                    }`}
                   >
                     <div className="flex -space-x-2">
                       {usersInSlot
@@ -217,13 +229,12 @@ const MonthlyView = ({
   setCurrentDate,
   allUsersAvailability,
   setView,
+  today,
 }) => {
   const month = currentDate.getMonth();
   const year = currentDate.getFullYear();
-
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   const firstDayOfMonth = new Date(year, month, 1).getDay();
-
   const calendarDays = useMemo(() => {
     const days = [];
     for (let i = 0; i < firstDayOfMonth; i++) {
@@ -234,7 +245,6 @@ const MonthlyView = ({
     }
     return days;
   }, [month, year, daysInMonth, firstDayOfMonth]);
-
   const dayHasActivity = (day) => {
     const dayString = day.toISOString().split("T")[0];
     const activity = { available: false, unavailable: false };
@@ -248,12 +258,10 @@ const MonthlyView = ({
     });
     return activity;
   };
-
   const handleDayClick = (date) => {
     setCurrentDate(date);
     setView("weekly");
   };
-
   return (
     <div className="bg-white rounded-lg shadow-md border border-gray-200 p-4">
       <div className="flex justify-between items-center mb-4">
@@ -284,25 +292,27 @@ const MonthlyView = ({
       <div className="grid grid-cols-7 gap-1 sm:gap-2">
         {calendarDays.map((dayInfo) => {
           if (dayInfo.blank) return <div key={dayInfo.key}></div>;
-
           const activity = dayHasActivity(dayInfo.date);
           const isToday =
             new Date().toDateString() === dayInfo.date.toDateString();
-
+          const isPast = dayInfo.date < today;
           let dayBgColor = "hover:bg-gray-100";
-          if (activity.unavailable && activity.available) {
+          if (isPast) {
+            dayBgColor = "bg-gray-200 opacity-50";
+          } else if (activity.unavailable && activity.available) {
             dayBgColor = "bg-yellow-100 hover:bg-yellow-200";
           } else if (activity.unavailable) {
             dayBgColor = "bg-red-100 hover:bg-red-200";
           } else if (activity.available) {
             dayBgColor = "bg-green-100 hover:bg-green-200";
           }
-
           return (
             <div
               key={dayInfo.key}
-              onClick={() => handleDayClick(dayInfo.date)}
-              className={`h-16 sm:h-24 p-2 border rounded-lg cursor-pointer transition-colors flex flex-col ${dayBgColor}`}
+              onClick={() => !isPast && handleDayClick(dayInfo.date)}
+              className={`h-16 sm:h-24 p-2 border rounded-lg transition-colors flex flex-col ${dayBgColor} ${
+                isPast ? "" : "cursor-pointer"
+              }`}
             >
               <span
                 className={`font-semibold ${isToday ? "text-blue-600" : ""}`}
@@ -319,7 +329,6 @@ const MonthlyView = ({
 
 // --- Main App Component ---
 const App = () => {
-  // --- State Management ---
   const [db, setDb] = useState(null);
   const [auth, setAuth] = useState(null);
   const [user, setUser] = useState(null);
@@ -331,8 +340,13 @@ const App = () => {
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [view, setView] = useState("weekly");
   const [selectionMode, setSelectionMode] = useState("available");
+  const [showFullDay, setShowFullDay] = useState(false);
+  const today = useMemo(() => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }, []);
 
-  // --- Group ID and Firebase Initialization ---
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     let id = urlParams.get("id");
@@ -346,14 +360,12 @@ const App = () => {
       }
     }
     setGroupId(id);
-
     try {
       const app = initializeApp(firebaseConfig);
       const firestore = getFirestore(app);
       const authInstance = getAuth(app);
       setDb(firestore);
       setAuth(authInstance);
-
       const unsubscribe = onAuthStateChanged(authInstance, (currentUser) => {
         setUser(currentUser);
         setIsAuthReady(true);
@@ -364,10 +376,8 @@ const App = () => {
     }
   }, []);
 
-  // --- Real-time Data Fetching from Firestore ---
   useEffect(() => {
     if (!isAuthReady || !db || !groupId) return;
-
     const availabilityCollection = collection(
       db,
       "groups",
@@ -375,7 +385,6 @@ const App = () => {
       "availability"
     );
     const q = query(availabilityCollection);
-
     const unsubscribe = onSnapshot(
       q,
       (querySnapshot) => {
@@ -389,11 +398,9 @@ const App = () => {
         console.error("Error fetching real-time availability:", error);
       }
     );
-
     return () => unsubscribe();
   }, [isAuthReady, db, groupId]);
 
-  // --- Authentication Handlers ---
   const handleSignIn = async () => {
     if (!auth) return;
     const provider = new GoogleAuthProvider();
@@ -403,23 +410,20 @@ const App = () => {
       console.error("Google sign-in failed:", error);
     }
   };
-
   const handleSignOut = async () => {
     if (!auth) return;
     await signOut(auth);
     setIsProfileOpen(false);
   };
 
-  // --- Calendar and Availability Logic ---
   const handleSlotClick = async (day, time) => {
+    if (day < today) return;
     if (!user) {
       handleSignIn();
       return;
     }
     if (!db || !groupId) return;
-
     const slotId = `${day.toISOString().split("T")[0]}T${time}`;
-
     const usersInSlot = getUsersInSlot(day, time);
     const unavailableUser = usersInSlot.find((u) => u.type === "unavailable");
     if (unavailableUser && unavailableUser.displayName !== user.displayName) {
@@ -427,11 +431,9 @@ const App = () => {
       setTimeout(() => setNotification(""), 2000);
       return;
     }
-
     const userDocRef = doc(db, "groups", groupId, "availability", user.uid);
     const currentUserData = allUsersAvailability[user.uid] || { slots: [] };
     const existingSlot = currentUserData.slots.find((s) => s.id === slotId);
-
     let newSlots;
     if (existingSlot) {
       if (existingSlot.type === selectionMode) {
@@ -447,7 +449,6 @@ const App = () => {
         { id: slotId, type: selectionMode },
       ];
     }
-
     if (newSlots.length === 0) {
       await deleteDoc(userDocRef);
     } else {
@@ -464,23 +465,21 @@ const App = () => {
   };
 
   const handleDayClick = async (day) => {
+    if (day < today) return;
     if (!user) {
       handleSignIn();
       return;
     }
     if (!db || !groupId) return;
-
     const dayString = day.toISOString().split("T")[0];
     const userDocRef = doc(db, "groups", groupId, "availability", user.uid);
     const currentUserData = allUsersAvailability[user.uid] || { slots: [] };
-
     const otherDaySlots = currentUserData.slots.filter(
       (slot) => !slot.id.startsWith(dayString)
     );
     const isDayAlreadySelected =
       currentUserData.slots.filter((slot) => slot.id.startsWith(dayString))
         .length === 24;
-
     let finalSlots;
     if (isDayAlreadySelected) {
       finalSlots = otherDaySlots;
@@ -493,7 +492,6 @@ const App = () => {
         });
       finalSlots = [...otherDaySlots, ...newDaySlots];
     }
-
     if (finalSlots.length === 0) {
       await deleteDoc(userDocRef);
     } else {
@@ -529,38 +527,49 @@ const App = () => {
     const slots = {};
     const totalUsers = Object.keys(allUsersAvailability).length;
     if (totalUsers === 0) return [];
-
     Object.values(allUsersAvailability).forEach((userData) => {
       userData.slots?.forEach((slot) => {
         if (slot.type === "available") {
           slots[slot.id] = (slots[slot.id] || 0) + 1;
         } else {
-          // Mark unavailable slots with a negative number to exclude them
           slots[slot.id] = -1;
         }
       });
     });
-
-    return Object.entries(slots)
+    const bestHourlySlots = Object.entries(slots)
       .filter(([id, count]) => count === totalUsers)
-      .map(([id]) => new Date(id))
+      .map(([id]) => id.split("T")[0]);
+    const uniqueDates = [...new Set(bestHourlySlots)];
+    return uniqueDates
+      .map((dateString) => new Date(dateString))
       .sort((a, b) => a - b);
   }, [allUsersAvailability]);
 
-  // --- UI Helper Functions ---
   const copyShareLink = () => {
     navigator.clipboard.writeText(window.location.href).then(() => {
       setNotification("Share link copied!");
       setTimeout(() => setNotification(""), 2000);
     });
   };
-
   const handleNewCalendar = () => {
     const newId = Math.random().toString(36).substring(2, 10);
     window.location.href = `${window.location.pathname}?id=${newId}`;
   };
+  const generateGoogleCalendarLink = (date) => {
+    const T = (n) => (n < 10 ? "0" + n : n);
+    const d = new Date(date);
+    const d2 = new Date(d);
+    d2.setDate(d.getDate() + 1);
+    const startDate = `${d.getFullYear()}${T(d.getMonth() + 1)}${T(
+      d.getDate()
+    )}`;
+    const endDate = `${d2.getFullYear()}${T(d2.getMonth() + 1)}${T(
+      d2.getDate()
+    )}`;
+    const url = `https://www.google.com/calendar/render?action=TEMPLATE&text=Hangout+with+Friends&dates=${startDate}/${endDate}&details=Plan+created+using+WhenAreYouFree.com`;
+    window.open(url, "_blank");
+  };
 
-  // --- RENDER ---
   if (!isAuthReady || !groupId) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-gray-100">
@@ -574,8 +583,8 @@ const App = () => {
       <div className="max-w-screen-xl mx-auto">
         <header className="mb-4 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
           <div className="w-full text-center sm:text-left">
-            <h1 className="text-xl sm:text-2xl font-bold text-gray-900">
-              Shared Availability
+            <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">
+              When Are You Free?
             </h1>
             <p className="text-gray-500 text-sm">
               Select a mode, then click a time or day to mark it.
@@ -664,6 +673,21 @@ const App = () => {
               Weekly
             </button>
           </div>
+          <div className="flex items-center gap-2">
+            <label
+              htmlFor="showFullDayToggle"
+              className="text-sm text-gray-600"
+            >
+              Show Full Day
+            </label>
+            <input
+              type="checkbox"
+              id="showFullDayToggle"
+              checked={showFullDay}
+              onChange={() => setShowFullDay(!showFullDay)}
+              className="toggle-checkbox"
+            />
+          </div>
           <div className="flex bg-gray-200 p-1 rounded-lg">
             <button
               onClick={() => setSelectionMode("available")}
@@ -693,6 +717,8 @@ const App = () => {
             handleSlotClick={handleSlotClick}
             getUsersInSlot={getUsersInSlot}
             handleDayClick={handleDayClick}
+            today={today}
+            showFullDay={showFullDay}
           />
         ) : (
           <MonthlyView
@@ -700,29 +726,36 @@ const App = () => {
             setCurrentDate={setCurrentDate}
             allUsersAvailability={allUsersAvailability}
             setView={setView}
+            today={today}
           />
         )}
 
-        {/* Best Times and Group Members Footer */}
         <footer className="mt-4 space-y-4">
           {bestTimes.length > 0 && (
             <div className="bg-white p-4 rounded-lg shadow-md border border-gray-200">
               <h3 className="font-bold text-lg mb-2 text-gray-800">
-                Best Times to Meet:
+                Best Dates to Meet:
               </h3>
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2 text-sm">
-                {bestTimes.map((time) => (
+                {bestTimes.map((date) => (
                   <div
-                    key={time.toISOString()}
-                    className="bg-green-100 text-green-800 p-2 rounded-md"
+                    key={date.toISOString()}
+                    className="bg-green-100 text-green-800 p-2 rounded-md flex justify-between items-center"
                   >
-                    {time.toLocaleString(undefined, {
-                      weekday: "long",
-                      month: "long",
-                      day: "numeric",
-                      hour: "numeric",
-                      minute: "numeric",
-                    })}
+                    <span>
+                      {date.toLocaleString(undefined, {
+                        weekday: "long",
+                        month: "long",
+                        day: "numeric",
+                      })}
+                    </span>
+                    <button
+                      onClick={() => generateGoogleCalendarLink(date)}
+                      title="Add to Google Calendar"
+                      className="p-1 hover:bg-green-200 rounded-full"
+                    >
+                      <CalendarPlus size={16} />
+                    </button>
                   </div>
                 ))}
               </div>
@@ -745,6 +778,12 @@ const App = () => {
               ))}
             </div>
           </div>
+          <div className="text-center text-xs text-gray-400 pt-4">
+            <p>
+              All times are shown in your local timezone:{" "}
+              {Intl.DateTimeFormat().resolvedOptions().timeZone}
+            </p>
+          </div>
         </footer>
       </div>
 
@@ -753,13 +792,7 @@ const App = () => {
           {notification}
         </div>
       )}
-      <style>{`
-        @keyframes fade-in-out {
-          0%, 100% { opacity: 0; transform: translateY(10px); }
-          10%, 90% { opacity: 1; transform: translateY(0); }
-        }
-        .animate-fade-in-out { animation: fade-in-out 3s ease-in-out forwards; }
-      `}</style>
+      <style>{` @keyframes fade-in-out { 0%, 100% { opacity: 0; transform: translateY(10px); } 10%, 90% { opacity: 1; transform: translateY(0); } } .animate-fade-in-out { animation: fade-in-out 3s ease-in-out forwards; } .toggle-checkbox { appearance: none; width: 3rem; height: 1.5rem; background-color: #e2e8f0; border-radius: 9999px; position: relative; cursor: pointer; transition: background-color 0.2s ease-in-out; } .toggle-checkbox:checked { background-color: #4299e1; } .toggle-checkbox::before { content: ''; position: absolute; width: 1.25rem; height: 1.25rem; background-color: white; border-radius: 9999px; top: 0.125rem; left: 0.125rem; transition: transform 0.2s ease-in-out; } .toggle-checkbox:checked::before { transform: translateX(1.5rem); } `}</style>
     </div>
   );
 };
