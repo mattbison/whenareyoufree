@@ -23,6 +23,7 @@ import {
   LogOut,
   PlusSquare,
   CalendarPlus,
+  Repeat,
 } from "lucide-react";
 
 // --- Firebase Configuration ---
@@ -48,6 +49,7 @@ const WeeklyView = ({
   handleDayClick,
   today,
   showFullDay,
+  openCopyModal,
 }) => {
   const daysOfWeek = useMemo(
     () =>
@@ -65,10 +67,7 @@ const WeeklyView = ({
     const allHours = Array(24)
       .fill(0)
       .map((_, i) => `${i.toString().padStart(2, "0")}:00`);
-    if (showFullDay) {
-      return allHours;
-    }
-    return allHours.slice(8); // Only show from 8 AM onwards
+    return showFullDay ? allHours : allHours.slice(8);
   }, [showFullDay]);
 
   return (
@@ -115,20 +114,45 @@ const WeeklyView = ({
           <div className="sticky top-0 left-0 bg-white z-10"></div>
           {daysOfWeek.map((day, i) => {
             const isPast = day < today;
+            const dayString = day.toISOString().split("T")[0];
+            const hasUserSlots =
+              user &&
+              allUsersAvailability[user.uid]?.slots.some((s) =>
+                s.id.startsWith(dayString)
+              );
+
             return (
               <div
                 key={i}
-                onClick={() => handleDayClick(day)}
                 className={`sticky top-0 bg-white z-10 py-2 border-b-2 border-gray-200 text-center transition-colors ${
-                  isPast ? "opacity-50" : "cursor-pointer hover:bg-gray-200"
+                  isPast ? "opacity-50" : ""
                 }`}
               >
-                <p className="font-semibold text-gray-600 text-xs sm:text-sm">
-                  {day.toLocaleDateString(undefined, { weekday: "short" })}
-                </p>
-                <p className="text-xl sm:text-2xl font-bold text-gray-800">
-                  {day.getDate()}
-                </p>
+                <div className="flex items-center justify-center gap-2">
+                  <div
+                    onClick={() => handleDayClick(day)}
+                    className={`flex flex-col ${
+                      isPast
+                        ? ""
+                        : "cursor-pointer hover:bg-gray-200 rounded-md p-1"
+                    }`}
+                  >
+                    <p className="font-semibold text-gray-600 text-xs sm:text-sm">
+                      {day.toLocaleDateString(undefined, { weekday: "short" })}
+                    </p>
+                    <p className="text-xl sm:text-2xl font-bold text-gray-800">
+                      {day.getDate()}
+                    </p>
+                  </div>
+                  {hasUserSlots && !isPast && (
+                    <button
+                      onClick={() => openCopyModal(day)}
+                      className="p-1 hover:bg-gray-300 rounded-full"
+                    >
+                      <Repeat size={14} />
+                    </button>
+                  )}
+                </div>
               </div>
             );
           })}
@@ -149,7 +173,6 @@ const WeeklyView = ({
                 const isAnyoneUnavailable = usersInSlot.some(
                   (u) => u.type === "unavailable"
                 );
-
                 let bgColor = "bg-gray-50 hover:bg-gray-200";
                 if (isPast) {
                   bgColor = "bg-gray-200";
@@ -165,7 +188,6 @@ const WeeklyView = ({
                 } else if (usersInSlot.length > 0) {
                   bgColor = "bg-yellow-100 hover:bg-yellow-200";
                 }
-
                 return (
                   <div
                     key={day.toISOString()}
@@ -327,6 +349,89 @@ const MonthlyView = ({
   );
 };
 
+const CopyScheduleModal = ({ sourceDate, onApply, onCancel }) => {
+  const [duration, setDuration] = useState("month");
+  const [overwrite, setOverwrite] = useState(true);
+
+  const handleApply = () => {
+    onApply({
+      sourceDate,
+      duration,
+      overwrite,
+    });
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-sm">
+        <h2 className="text-xl font-bold mb-4">Copy Schedule</h2>
+        <p className="mb-4 text-gray-600">
+          Apply the schedule from{" "}
+          <span className="font-semibold">
+            {sourceDate.toLocaleDateString(undefined, {
+              weekday: "long",
+              month: "long",
+              day: "numeric",
+            })}
+          </span>{" "}
+          to future dates.
+        </p>
+
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Apply to:
+            </label>
+            <select
+              value={duration}
+              onChange={(e) => setDuration(e.target.value)}
+              className="w-full p-2 border border-gray-300 rounded-md"
+            >
+              <option value="month">
+                Every{" "}
+                {sourceDate.toLocaleDateString(undefined, { weekday: "long" })}{" "}
+                this month
+              </option>
+              <option value="3months">
+                Every{" "}
+                {sourceDate.toLocaleDateString(undefined, { weekday: "long" })}{" "}
+                for 3 months
+              </option>
+            </select>
+          </div>
+          <div>
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={overwrite}
+                onChange={(e) => setOverwrite(e.target.checked)}
+              />
+              <span className="text-sm text-gray-700">
+                Overwrite existing entries on those days
+              </span>
+            </label>
+          </div>
+        </div>
+
+        <div className="mt-6 flex justify-end gap-3">
+          <button
+            onClick={onCancel}
+            className="px-4 py-2 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleApply}
+            className="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600"
+          >
+            Apply
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // --- Main App Component ---
 const App = () => {
   const [db, setDb] = useState(null);
@@ -341,6 +446,10 @@ const App = () => {
   const [view, setView] = useState("weekly");
   const [selectionMode, setSelectionMode] = useState("available");
   const [showFullDay, setShowFullDay] = useState(false);
+  const [copyModalInfo, setCopyModalInfo] = useState({
+    isOpen: false,
+    sourceDate: null,
+  });
   const today = useMemo(() => {
     const d = new Date();
     d.setHours(0, 0, 0, 0);
@@ -507,6 +616,70 @@ const App = () => {
     }
   };
 
+  const handleApplyCopy = async ({ sourceDate, duration, overwrite }) => {
+    if (!user || !db || !groupId) return;
+
+    const sourceDayString = sourceDate.toISOString().split("T")[0];
+    const sourceSlots = (allUsersAvailability[user.uid]?.slots || []).filter(
+      (s) => s.id.startsWith(sourceDayString)
+    );
+    if (sourceSlots.length === 0) return;
+
+    const sourceDayOfWeek = sourceDate.getDay();
+    const endDate = new Date(sourceDate);
+    endDate.setMonth(endDate.getMonth() + (duration === "month" ? 1 : 3));
+
+    const targetDates = [];
+    let currentDateIterator = new Date(sourceDate);
+    currentDateIterator.setDate(currentDateIterator.getDate() + 1); // Start from the next day
+
+    while (currentDateIterator < endDate) {
+      if (currentDateIterator.getDay() === sourceDayOfWeek) {
+        targetDates.push(new Date(currentDateIterator));
+      }
+      currentDateIterator.setDate(currentDateIterator.getDate() + 1);
+    }
+
+    const currentUserData = allUsersAvailability[user.uid] || { slots: [] };
+    let finalSlots = [...currentUserData.slots];
+
+    if (overwrite) {
+      const targetDateStrings = targetDates.map(
+        (d) => d.toISOString().split("T")[0]
+      );
+      finalSlots = finalSlots.filter(
+        (slot) =>
+          !targetDateStrings.some((dateStr) => slot.id.startsWith(dateStr))
+      );
+    }
+
+    targetDates.forEach((date) => {
+      const targetDayString = date.toISOString().split("T")[0];
+      sourceSlots.forEach((sourceSlot) => {
+        const time = sourceSlot.id.split("T")[1];
+        finalSlots.push({
+          id: `${targetDayString}T${time}`,
+          type: sourceSlot.type,
+        });
+      });
+    });
+
+    const userDocRef = doc(db, "groups", groupId, "availability", user.uid);
+    await setDoc(
+      userDocRef,
+      {
+        slots: finalSlots,
+        displayName: user.displayName,
+        photoURL: user.photoURL,
+      },
+      { merge: true }
+    );
+
+    setCopyModalInfo({ isOpen: false, sourceDate: null });
+    setNotification("Schedule copied successfully!");
+    setTimeout(() => setNotification(""), 2000);
+  };
+
   const getUsersInSlot = (day, time) => {
     const slotId = `${day.toISOString().split("T")[0]}T${time}`;
     return Object.values(allUsersAvailability)
@@ -527,7 +700,6 @@ const App = () => {
     const slots = {};
     const totalUsers = Object.keys(allUsersAvailability).length;
     if (totalUsers === 0) return [];
-
     Object.values(allUsersAvailability).forEach((userData) => {
       userData.slots?.forEach((slot) => {
         if (slot.type === "available") {
@@ -537,13 +709,10 @@ const App = () => {
         }
       });
     });
-
     const bestHourlySlots = Object.entries(slots)
       .filter(([id, count]) => count === totalUsers)
       .map(([id]) => id.split("T")[0]);
-
     const uniqueDates = [...new Set(bestHourlySlots)];
-
     return uniqueDates
       .map((dateString) => new Date(dateString.replace(/-/g, "/")))
       .sort((a, b) => a - b);
@@ -584,6 +753,13 @@ const App = () => {
 
   return (
     <div className="bg-gray-100 min-h-screen font-sans text-gray-800 p-2 sm:p-4">
+      {copyModalInfo.isOpen && (
+        <CopyScheduleModal
+          sourceDate={copyModalInfo.sourceDate}
+          onApply={handleApplyCopy}
+          onCancel={() => setCopyModalInfo({ isOpen: false, sourceDate: null })}
+        />
+      )}
       <div className="max-w-screen-xl mx-auto">
         <header className="mb-4 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
           <div className="w-full text-center sm:text-left">
@@ -723,6 +899,9 @@ const App = () => {
             handleDayClick={handleDayClick}
             today={today}
             showFullDay={showFullDay}
+            openCopyModal={(date) =>
+              setCopyModalInfo({ isOpen: true, sourceDate: date })
+            }
           />
         ) : (
           <MonthlyView
