@@ -1,0 +1,5 @@
+[[redirects]]
+  from = "/__/auth/*"
+  to = "https://whenareyoufree-a51fa.firebaseapp.com/__/auth/:splat"
+  status = 200
+  force = true

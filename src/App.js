@@ -29,7 +29,7 @@ import {
 // --- Firebase Configuration ---
 const firebaseConfig = {
   apiKey: "AIzaSyADkhtS4NSsWXd2tmjHtY5ogTsRcyzpDr0",
-  authDomain: "whenareyoufree-a51fa.firebaseapp.com",
+  authDomain: "whenareyoufree.netlify.app",
   projectId: "whenareyoufree-a51fa",
   storageBucket: "whenareyoufree-a51fa.firebasestorage.app",
   messagingSenderId: "810606897689",
