@@ -4,6 +4,11 @@ html {
   -moz-osx-font-smoothing: grayscale;
 }
 
+html.dark {
+  color-scheme: dark;
+}
+
 body {
   margin: 0;
+  transition: background-color 0.2s ease;
 }
