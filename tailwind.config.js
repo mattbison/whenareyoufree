@@ -14,16 +14,19 @@ module.exports = {
         surface: rgb("surface"),
         ink: rgb("ink"),
         muted: rgb("muted"),
-        accent: rgb("accent"),
-        // Availability states. "free" = everyone, "some" = others, "busy" = blocked.
-        free: { DEFAULT: rgb("free"), ink: rgb("free-ink") },
+        // Brand teal. `accent-ink` is the darker shade for teal text on white.
+        accent: { DEFAULT: rgb("accent"), ink: rgb("accent-ink") },
+        // Availability states: "you" = your own free time, "some" = others,
+        // "free" = everyone (shares the brand teal), "busy" = blocked.
+        you: rgb("you"),
         some: rgb("some"),
+        free: { DEFAULT: rgb("accent"), ink: rgb("accent-ink") },
         busy: { DEFAULT: rgb("busy"), ink: rgb("busy-ink") },
         hairline: "var(--hairline)",
         overlay: { DEFAULT: "var(--overlay)", strong: "var(--overlay-strong)" },
       },
       borderRadius: {
-        card: "20px",
+        card: "24px",
       },
       boxShadow: {
         card: "var(--shadow-card)",
@@ -31,7 +34,7 @@ module.exports = {
       },
       fontFamily: {
         sans: [
-          "Inter",
+          "Figtree",
           "-apple-system",
           "BlinkMacSystemFont",
           "Segoe UI",
