@@ -1,0 +1,14 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Target the specific subcollection where availability is stored
+    match /groups/{groupId}/availability/{userId} {
+      // Allow anyone to read anyone else's availability within the same group.
+      allow read: if true;
+
+      // A user can only create, update, or delete their own availability document.
+      // The {userId} in the path must match the ID of the user making the request.
+      allow write: if request.auth.uid == userId;
+    }
+  }
+}
