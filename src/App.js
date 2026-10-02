@@ -1337,18 +1337,21 @@ const App = () => {
       ? currentDate.getTime() === today.getTime()
       : today >= visibleDays[0] && today <= visibleDays[6];
 
-  // Hours each person has marked free in the days currently on screen.
-  const freeHoursShown = useMemo(() => {
-    const keys = new Set(visibleDays.map(toDateKey));
-    const counts = {};
+  // Upcoming dates (today onward) each person has marked any free time on.
+  const upcomingFreeDates = useMemo(() => {
+    const todayKey = toDateKey(today);
+    const byUid = {};
     members.forEach(([uid, userData]) => {
-      counts[uid] = (userData.slots || []).filter(
-        (s) => s.type === "available" && keys.has(s.id.split("T")[0])
-      ).length;
+      const keys = new Set(
+        (userData.slots || [])
+          .filter((s) => s.type === "available")
+          .map((s) => s.id.split("T")[0])
+          .filter((key) => key >= todayKey)
+      );
+      byUid[uid] = [...keys].sort().map(fromDateKey);
     });
-    return counts;
-  }, [members, visibleDays]);
-  const shownSpanLabel = view === "threeDay" ? "these 3 days" : "this week";
+    return byUid;
+  }, [members, today]);
 
   // --- Actions ---
 
@@ -1634,7 +1637,7 @@ const App = () => {
           <div className="h-12 flex items-center justify-between gap-3">
             <div className="flex items-center gap-2.5 min-w-0">
               <AppMark />
-              <h1 className="text-lg sm:text-2xl font-black tracking-tight truncate">
+              <h1 className="text-[22px] sm:text-3xl font-black tracking-tight truncate">
                 When Are You Free?
               </h1>
             </div>
@@ -1781,10 +1784,8 @@ const App = () => {
                 Who's in{" "}
                 <span className="text-muted font-bold tabular-nums">{totalMembers}</span>
               </h3>
-              {totalMembers > 0 && view !== "monthly" && (
-                <span className="text-xs font-semibold text-muted">
-                  Hours free {shownSpanLabel}
-                </span>
+              {totalMembers > 0 && (
+                <span className="text-xs font-semibold text-muted">Upcoming free days</span>
               )}
             </div>
             {totalMembers === 0 ? (
@@ -1794,7 +1795,8 @@ const App = () => {
             ) : (
               <ul className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-3">
                 {members.map(([uid, m]) => {
-                  const hours = freeHoursShown[uid] || 0;
+                  const dates = upcomingFreeDates[uid] || [];
+                  const shownDates = dates.slice(0, 4);
                   const color = colorOf(uid);
                   return (
                     <li
@@ -1814,13 +1816,28 @@ const App = () => {
                       <span className="mt-1.5 block w-full text-base font-extrabold text-ink truncate">
                         {uid === user?.uid ? "You" : firstName(m.displayName)}
                       </span>
-                      {view !== "monthly" && (
-                        <span
-                          className={`inline-flex items-center h-6 px-2.5 rounded-full text-xs font-extrabold tabular-nums ${
-                            hours ? "bg-surface text-ink" : "text-muted"
-                          }`}
-                        >
-                          {hours ? `${hours}h free` : "No times yet"}
+                      {dates.length === 0 ? (
+                        <span className="text-xs font-semibold text-muted">
+                          No free days yet
+                        </span>
+                      ) : (
+                        <span className="flex flex-wrap justify-center gap-1">
+                          {shownDates.map((date) => (
+                            <button
+                              key={date.getTime()}
+                              type="button"
+                              onClick={() => jumpToDay(date)}
+                              aria-label={`Show ${formatDay(date, { weekday: "long", month: "long", day: "numeric" })}`}
+                              className="inline-flex items-center h-6 px-2 rounded-full bg-surface text-ink text-xs font-extrabold tabular-nums hover:bg-surface/70 active:scale-95 transition"
+                            >
+                              {formatDay(date, { month: "short", day: "numeric" })}
+                            </button>
+                          ))}
+                          {dates.length > shownDates.length && (
+                            <span className="inline-flex items-center h-6 px-2 text-xs font-extrabold text-muted tabular-nums">
+                              +{dates.length - shownDates.length}
+                            </span>
+                          )}
                         </span>
                       )}
                     </li>
