@@ -2,17 +2,97 @@
 @tailwind components;
 @tailwind utilities;
 
-html {
-  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+/* --- Design tokens (space-separated RGB so Tailwind can apply opacity) --- */
+:root {
+  --canvas: 245 245 247;
+  --surface: 255 255 255;
+  --ink: 29 29 31;
+  --muted: 110 110 115;
+  --accent: 0 113 227;
+  --free: 52 199 89;
+  --free-ink: 36 138 61;
+  --some: 245 166 35;
+  --busy: 255 59 48;
+  --busy-ink: 215 0 21;
+  --hairline: rgba(0, 0, 0, 0.08);
+  --overlay: rgba(0, 0, 0, 0.05);
+  --overlay-strong: rgba(0, 0, 0, 0.09);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.03), 0 4px 20px rgba(0, 0, 0, 0.04);
+  --shadow-float: 0 8px 30px rgba(0, 0, 0, 0.14);
 }
 
 html.dark {
   color-scheme: dark;
+  --canvas: 0 0 0;
+  --surface: 28 28 30;
+  --ink: 245 245 247;
+  --muted: 152 152 157;
+  --accent: 10 132 255;
+  --free: 48 209 88;
+  --free-ink: 48 209 88;
+  --some: 255 179 64;
+  --busy: 255 69 58;
+  --busy-ink: 255 105 97;
+  --hairline: rgba(255, 255, 255, 0.1);
+  --overlay: rgba(255, 255, 255, 0.08);
+  --overlay-strong: rgba(255, 255, 255, 0.13);
+  --shadow-card: none;
+  --shadow-float: 0 8px 30px rgba(0, 0, 0, 0.6);
+}
+
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-tap-highlight-color: transparent;
 }
 
 body {
   margin: 0;
-  transition: background-color 0.2s ease;
+  background-color: rgb(var(--canvas));
+  color: rgb(var(--ink));
+}
+
+/* Keyboard users get a clear ring; mouse and touch users don't. */
+:focus-visible {
+  outline: 2px solid rgb(var(--accent));
+  outline-offset: 2px;
+}
+
+/* --- Motion --- */
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes sheet-in {
+  from { transform: translateY(24px); opacity: 0; }
+  to { transform: none; opacity: 1; }
+}
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes pop {
+  0% { transform: scale(0.6); opacity: 0; }
+  70% { transform: scale(1.08); opacity: 1; }
+  100% { transform: scale(1); }
+}
+@keyframes menu-in {
+  from { opacity: 0; transform: translateY(-4px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+
+.animate-toast-in { animation: toast-in 0.22s cubic-bezier(0.2, 0.9, 0.3, 1) both; }
+.animate-sheet-in { animation: sheet-in 0.28s cubic-bezier(0.2, 0.9, 0.3, 1) both; }
+.animate-fade-in { animation: fade-in 0.2s ease-out both; }
+.animate-pop { animation: pop 0.25s ease-out both; }
+.animate-menu-in { animation: menu-in 0.16s ease-out both; transform-origin: top right; }
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

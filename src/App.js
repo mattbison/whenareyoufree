@@ -1,10 +1,4 @@
-import React, {
-  useState,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-} from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import "./styles.css";
 import { initializeApp } from "firebase/app";
 import {
@@ -24,20 +18,26 @@ import {
   deleteDoc,
 } from "firebase/firestore";
 import {
+  Ban,
+  CalendarCheck2,
+  CalendarPlus,
+  Check,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
-  LogOut,
-  PlusSquare,
-  CalendarPlus,
-  Repeat,
-  Pencil,
-  Check,
-  X,
-  Share2,
-  StickyNote,
+  ChevronUp,
+  Eraser,
   Loader2,
-  Sun,
+  LogOut,
+  Monitor,
   Moon,
+  Pencil,
+  Plus,
+  Repeat,
+  Share,
+  StickyNote,
+  Sun,
+  X,
 } from "lucide-react";
 
 // --- Firebase Configuration ---
@@ -51,15 +51,29 @@ const firebaseConfig = {
   measurementId: "G-5GDTHC0GNV",
 };
 
-// --- Shared design tokens (Apple-style: soft neutrals, one confident accent) ---
-const CARD =
-  "bg-white dark:bg-[#1c1c1e] border border-black/[0.06] dark:border-white/[0.08] rounded-[20px] shadow-[0_2px_20px_rgba(0,0,0,0.04)] dark:shadow-none";
-const TEXT_PRIMARY = "text-[#1d1d1f] dark:text-[#f5f5f7]";
-const TEXT_SECONDARY = "text-[#6e6e73] dark:text-[#98989d]";
+// --- Shared class recipes (colors come from tokens in styles.css) ---
+const CARD = "bg-surface border border-hairline rounded-card shadow-card";
 const ICON_BTN =
-  "p-2.5 rounded-full hover:bg-black/[0.05] dark:hover:bg-white/[0.08] active:bg-black/[0.08] dark:active:bg-white/[0.12] transition-colors";
+  "inline-flex items-center justify-center h-10 w-10 rounded-full text-ink hover:bg-overlay active:bg-overlay-strong active:scale-95 transition";
+const BTN_PRIMARY =
+  "inline-flex items-center justify-center gap-2 h-11 px-5 rounded-full bg-accent text-white text-[15px] font-semibold hover:brightness-110 active:scale-[0.97] active:brightness-95 transition disabled:opacity-50";
+const BTN_SECONDARY =
+  "inline-flex items-center justify-center gap-2 h-10 px-4 rounded-full bg-overlay text-ink text-sm font-semibold hover:bg-overlay-strong active:scale-[0.97] transition";
 
-// --- Date helpers ---
+// Weekly grid shows 8 AM onward unless early hours are expanded.
+const FIRST_WAKING_HOUR = 8;
+
+// Cell tint per availability state. Shared by the grid and its legend so the
+// two can never drift apart.
+const SLOT_TINT = {
+  empty: "",
+  you: "bg-accent/15 dark:bg-accent/25",
+  some: "bg-some/20",
+  everyone: "bg-free/25 dark:bg-free/30",
+  busy: "bg-busy/10 dark:bg-busy/20",
+};
+
+// --- Date & time helpers ---
 
 // "YYYY-MM-DD" for the *local* calendar day. Slot and note IDs are keyed on
 // this. Never use toISOString() for this: it converts to UTC, which shifts the
@@ -71,521 +85,938 @@ const toDateKey = (date) => {
   return `${y}-${m}-${d}`;
 };
 
+const fromDateKey = (dateKey) => {
+  const [y, m, d] = dateKey.split("-").map(Number);
+  return new Date(y, m - 1, d);
+};
+
 const addDays = (date, days) => {
   const d = new Date(date);
   d.setDate(d.getDate() + days);
   return d;
 };
 
-// --- Small shared UI helpers ---
+const startOfWeek = (date) => {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() - d.getDay());
+  return d;
+};
 
-const ModeToggle = ({ mode, setMode, className = "" }) => (
-  <div
-    className={`inline-flex items-center bg-black/[0.05] dark:bg-white/[0.08] rounded-full p-1 ${className}`}
-  >
-    <button
-      type="button"
-      onClick={() => setMode("available")}
-      className={`px-4 py-2.5 sm:py-1.5 text-sm font-semibold rounded-full transition-all duration-150 ${
-        mode === "available"
-          ? "bg-[#0071e3] text-white shadow-sm"
-          : `${TEXT_SECONDARY} hover:text-[#1d1d1f] dark:hover:text-white`
-      }`}
-    >
-      Available
-    </button>
-    <button
-      type="button"
-      onClick={() => setMode("unavailable")}
-      className={`px-4 py-2.5 sm:py-1.5 text-sm font-semibold rounded-full transition-all duration-150 ${
-        mode === "unavailable"
-          ? "bg-red-500 text-white shadow-sm"
-          : `${TEXT_SECONDARY} hover:text-[#1d1d1f] dark:hover:text-white`
-      }`}
-    >
-      Unavailable
-    </button>
-  </div>
+const slotIdFor = (day, hour) =>
+  `${toDateKey(day)}T${String(hour).padStart(2, "0")}:00`;
+
+// Locale-aware hour label: "8 AM" in en-US, "08" in 24-hour locales.
+const formatHour = (hour) =>
+  new Date(2000, 0, 1, hour % 24).toLocaleTimeString(undefined, {
+    hour: "numeric",
+  });
+
+const formatRange = ([start, end]) =>
+  `${formatHour(start)} – ${formatHour(end)}`;
+
+const formatDay = (date, opts) => date.toLocaleDateString(undefined, opts);
+
+// "Today", "Tomorrow", or the weekday name for anything later.
+const relativeDayLabel = (date) => {
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  const diff = Math.round((date - start) / 86400000);
+  if (diff === 0) return "Today";
+  if (diff === 1) return "Tomorrow";
+  return formatDay(date, { weekday: "long" });
+};
+
+const firstName = (name) => name?.split(" ")[0] || "Someone";
+
+const joinNames = (names) => {
+  if (names.length <= 2) return names.join(" and ");
+  return `${names.slice(0, 2).join(", ")} +${names.length - 2}`;
+};
+
+const newGroupId = () => Math.random().toString(36).substring(2, 10);
+
+// Classifies one hour for one viewer. Busy wins, then "everyone", then the
+// viewer's own entry, then other people.
+const getSlotState = (people, uid, totalMembers) => {
+  const free = people.filter((p) => p.type === "available");
+  const busy = people.filter((p) => p.type === "unavailable");
+  let state = "empty";
+  if (busy.length) state = "busy";
+  else if (totalMembers >= 2 && free.length === totalMembers) state = "everyone";
+  else if (uid && free.some((p) => p.uid === uid)) state = "you";
+  else if (free.length) state = "some";
+  return { state, free, busy };
+};
+
+// --- Hooks ---
+
+const useMediaQuery = (queryString) => {
+  const [matches, setMatches] = useState(
+    () => window.matchMedia?.(queryString).matches ?? false
+  );
+  useEffect(() => {
+    const mql = window.matchMedia?.(queryString);
+    if (!mql) return;
+    const onChange = () => setMatches(mql.matches);
+    mql.addEventListener("change", onChange);
+    return () => mql.removeEventListener("change", onChange);
+  }, [queryString]);
+  return matches;
+};
+
+// Persists a string preference in localStorage, tolerating private browsing.
+const useStoredState = (key, fallback) => {
+  const [value, setValue] = useState(() => {
+    try {
+      return localStorage.getItem(key) ?? fallback;
+    } catch (error) {
+      return fallback;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(key, value);
+    } catch (error) {
+      // Ignore storage errors (e.g. private browsing).
+    }
+  }, [key, value]);
+  return [value, setValue];
+};
+
+// --- Small shared UI ---
+
+const GoogleMark = ({ size = 18 }) => (
+  <svg width={size} height={size} viewBox="0 0 48 48" aria-hidden="true">
+    <path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z" />
+    <path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z" />
+    <path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-8l-6.5 5C9.5 39.6 16.2 44 24 44z" />
+    <path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z" />
+  </svg>
 );
 
-// --- Helper Components ---
+const AppMark = () => (
+  <span className="inline-flex items-center justify-center h-8 w-8 rounded-[9px] bg-accent text-white shrink-0">
+    <CalendarCheck2 size={18} strokeWidth={2.25} />
+  </span>
+);
 
-const WeeklyView = ({
-  currentDate,
-  setCurrentDate,
-  allUsersAvailability,
-  user,
-  handleSlotClick,
-  getUsersInSlot,
-  handleDayClick,
-  today,
-  showFullDay,
-  openCopyModal,
-}) => {
-  const scrollContainerRef = useRef(null);
-
-  const daysOfWeek = useMemo(
-    () =>
-      Array(7)
-        .fill(0)
-        .map((_, i) => {
-          const d = new Date(currentDate);
-          d.setHours(0, 0, 0, 0);
-          d.setDate(d.getDate() - d.getDay() + i);
-          return d;
-        }),
-    [currentDate]
+// Profile photo with a quiet initials fallback when the photo is missing or
+// fails to load. Google photo URLs can 403 when a referrer is sent.
+const Avatar = ({ src, name, size = 32, className = "", ring = false }) => {
+  const [failed, setFailed] = useState(false);
+  const style = { width: size, height: size };
+  const ringClass = ring ? "ring-2 ring-surface" : "";
+  if (!src || failed) {
+    return (
+      <span
+        style={{ ...style, fontSize: Math.max(9, size * 0.42) }}
+        className={`inline-flex items-center justify-center rounded-full bg-overlay-strong text-muted font-semibold shrink-0 ${ringClass} ${className}`}
+        title={name}
+        aria-hidden="true"
+      >
+        {(name || "?").charAt(0).toUpperCase()}
+      </span>
+    );
+  }
+  return (
+    <img
+      src={src}
+      alt=""
+      title={name}
+      style={style}
+      referrerPolicy="no-referrer"
+      onError={() => setFailed(true)}
+      className={`rounded-full object-cover shrink-0 ${ringClass} ${className}`}
+    />
   );
+};
 
-  const timeSlots = useMemo(() => {
-    const allHours = Array(24)
-      .fill(0)
-      .map((_, i) => `${i.toString().padStart(2, "0")}:00`);
-    return showFullDay ? allHours : allHours.slice(8);
-  }, [showFullDay]);
+// Two-to-three option segmented control with a sliding indicator.
+const Segmented = ({ options, value, onChange, label, className = "" }) => {
+  const index = Math.max(
+    0,
+    options.findIndex((o) => o.value === value)
+  );
+  const active = options[index];
+  return (
+    <div
+      role="group"
+      aria-label={label}
+      className={`relative grid grid-flow-col auto-cols-fr bg-overlay rounded-full p-1 ${className}`}
+    >
+      <span
+        aria-hidden="true"
+        className={`absolute top-1 bottom-1 left-1 rounded-full shadow-sm transition-transform duration-200 ease-out ${
+          active.indicatorClass || "bg-surface dark:bg-white/20"
+        }`}
+        style={{
+          width: `calc((100% - 0.5rem) / ${options.length})`,
+          transform: `translateX(${index * 100}%)`,
+        }}
+      />
+      {options.map((o) => {
+        const isActive = o.value === value;
+        const Icon = o.icon;
+        return (
+          <button
+            key={o.value}
+            type="button"
+            aria-pressed={isActive}
+            aria-label={o.ariaLabel}
+            onClick={() => onChange(o.value)}
+            className={`relative z-10 inline-flex items-center justify-center gap-1.5 h-9 px-4 text-sm font-semibold rounded-full transition-colors whitespace-nowrap ${
+              isActive ? o.activeTextClass || "text-ink" : "text-muted hover:text-ink"
+            }`}
+          >
+            {Icon && <Icon size={15} strokeWidth={2.5} aria-hidden="true" />}
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+};
 
-  // Hour rows snap to the top of the grid, so reserve room for the sticky
-  // day header; otherwise every snap tucks the top row underneath it.
-  useLayoutEffect(() => {
-    const container = scrollContainerRef.current;
-    if (!container) return;
-    const syncScrollPadding = () => {
-      const headerHeight =
-        container.querySelector("[data-day]")?.offsetHeight || 0;
-      container.style.scrollPaddingTop = `${headerHeight}px`;
+const ModeToggle = ({ mode, setMode, className = "" }) => (
+  <Segmented
+    label="What tapping an hour marks"
+    value={mode}
+    onChange={setMode}
+    className={className}
+    options={[
+      {
+        value: "available",
+        label: "I'm free",
+        icon: Check,
+        indicatorClass: "bg-accent",
+        activeTextClass: "text-white",
+      },
+      {
+        value: "unavailable",
+        label: "I'm busy",
+        icon: Ban,
+        indicatorClass: "bg-busy",
+        activeTextClass: "text-white",
+      },
+    ]}
+  />
+);
+
+// Bottom sheet on phones, centered dialog on larger screens.
+const Sheet = ({ title, subtitle, onClose, children }) => {
+  const panelRef = useRef(null);
+  // Ref so a parent re-render (e.g. a live Firestore update) doesn't re-run
+  // the effect below and yank focus back to the panel.
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  useEffect(() => {
+    const previouslyFocused = document.activeElement;
+    panelRef.current?.focus();
+    const onKey = (e) => e.key === "Escape" && onCloseRef.current();
+    document.addEventListener("keydown", onKey);
+    const { overflow } = document.body.style;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = overflow;
+      previouslyFocused?.focus?.();
     };
-    syncScrollPadding();
-    window.addEventListener("resize", syncScrollPadding);
-    return () => window.removeEventListener("resize", syncScrollPadding);
   }, []);
 
-  // When "Full Day" is switched on, jump the scroll position to a sensible
-  // waking hour instead of dropping the user at midnight. Scrolls only the
-  // grid container (scrollIntoView would also scroll the page).
-  useEffect(() => {
-    const container = scrollContainerRef.current;
-    if (!showFullDay || !container) return;
-    const target = container.querySelector('[data-hour="08"]');
-    if (target) {
-      const headerHeight =
-        container.querySelector("[data-day]")?.offsetHeight || 0;
-      container.scrollTop = target.offsetTop - headerHeight;
-    }
-  }, [showFullDay]);
-
-  // Always land on today's column instead of making mobile users swipe
-  // over from Sunday. No-ops safely when today isn't in the visible week.
-  useEffect(() => {
-    const container = scrollContainerRef.current;
-    if (!container) return;
-    const target = container.querySelector(`[data-day="${toDateKey(today)}"]`);
-    if (target) {
-      const timeColumnWidth = container.querySelector("[data-hour]")?.offsetWidth || 0;
-      container.scrollLeft = target.offsetLeft - timeColumnWidth;
-    }
-  }, [daysOfWeek, today]);
-
   return (
-    <div className={`${CARD} overflow-hidden`}>
-      <div className="flex justify-between items-center p-3 sm:p-4 border-b border-black/[0.06] dark:border-white/[0.08]">
-        <button
-          onClick={() => setCurrentDate((d) => addDays(d, -7))}
-          className={`${ICON_BTN} ${TEXT_PRIMARY}`}
-          aria-label="Previous week"
-        >
-          <ChevronLeft size={20} />
-        </button>
-        <h2 className={`text-sm sm:text-lg font-semibold text-center ${TEXT_PRIMARY}`}>
-          {daysOfWeek[0].toLocaleDateString(undefined, {
-            month: "short",
-            day: "numeric",
-          })}{" "}
-          -{" "}
-          {daysOfWeek[6].toLocaleDateString(undefined, {
-            month: "short",
-            day: "numeric",
-            year: "numeric",
-          })}
-        </h2>
-        <button
-          onClick={() => setCurrentDate((d) => addDays(d, 7))}
-          className={`${ICON_BTN} ${TEXT_PRIMARY}`}
-          aria-label="Next week"
-        >
-          <ChevronRight size={20} />
-        </button>
-      </div>
-
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center">
       <div
-        ref={scrollContainerRef}
-        className="relative overflow-auto snap-y snap-proximity"
-        style={{ maxHeight: "calc(100vh - 380px)" }}
+        className="absolute inset-0 bg-black/30 dark:bg-black/60 backdrop-blur-sm animate-fade-in"
+        onClick={onClose}
+        aria-hidden="true"
+      />
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        tabIndex={-1}
+        className="relative w-full sm:max-w-sm max-h-[90dvh] overflow-y-auto bg-surface rounded-t-[24px] sm:rounded-card shadow-float p-5 pt-3 sm:pt-5 animate-sheet-in focus:outline-none"
+        style={{ paddingBottom: "calc(1.25rem + env(safe-area-inset-bottom))" }}
       >
         <div
-          className="grid grid-cols-[auto_repeat(7,1fr)]"
-          style={{ minWidth: "640px" }}
-        >
-          <div className="sticky top-0 left-0 bg-white dark:bg-[#1c1c1e] z-20"></div>
-          {daysOfWeek.map((day, i) => {
-            const isPast = day < today;
-            const isToday = day.toDateString() === new Date().toDateString();
-            const dayString = toDateKey(day);
-            const hasUserSlots =
-              user &&
-              allUsersAvailability[user.uid]?.slots.some((s) =>
-                s.id.startsWith(dayString)
-              );
-
-            return (
-              <div
-                key={i}
-                data-day={dayString}
-                className={`sticky top-0 bg-white dark:bg-[#1c1c1e] z-10 py-2 border-b-2 text-center transition-colors ${
-                  isToday
-                    ? "border-[#0071e3]"
-                    : "border-black/[0.04] dark:border-white/[0.06]"
-                } ${isPast ? "opacity-40" : ""}`}
-              >
-                <div className="flex items-center justify-center gap-1">
-                  <div
-                    onClick={() => handleDayClick(day)}
-                    className={`flex flex-col items-center px-1.5 py-1 rounded-lg ${
-                      isPast
-                        ? ""
-                        : "cursor-pointer hover:bg-black/[0.04] dark:hover:bg-white/[0.06] active:bg-black/[0.08] dark:active:bg-white/[0.1]"
-                    } ${isToday ? "bg-[#0071e3]/10" : ""}`}
-                  >
-                    <p className={`font-semibold ${TEXT_SECONDARY} text-[11px] sm:text-sm uppercase tracking-wide`}>
-                      {day.toLocaleDateString(undefined, { weekday: "short" })}
-                    </p>
-                    <p
-                      className={`text-lg sm:text-2xl font-bold ${
-                        isToday ? "text-[#0071e3]" : TEXT_PRIMARY
-                      }`}
-                    >
-                      {day.getDate()}
-                    </p>
-                  </div>
-                  {hasUserSlots && !isPast && (
-                    <button
-                      onClick={() => openCopyModal(day)}
-                      className={`p-1.5 rounded-full ${TEXT_SECONDARY} hover:bg-black/[0.06] dark:hover:bg-white/[0.1]`}
-                      aria-label="Copy this day's schedule"
-                    >
-                      <Repeat size={13} />
-                    </button>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-
-          {timeSlots.map((time) => (
-            <React.Fragment key={time}>
-              <div
-                data-hour={time.split(":")[0]}
-                className="snap-start sticky left-0 bg-white dark:bg-[#1c1c1e] text-[11px] sm:text-xs text-[#86868b] flex items-center justify-center pl-2 pr-2 border-r border-t border-black/[0.05] dark:border-white/[0.06]"
-              >
-                {time}
-              </div>
-              {daysOfWeek.map((day) => {
-                const isPast = day < today;
-                const usersInSlot = getUsersInSlot(day, time);
-                const totalUsersInGroup =
-                  Object.keys(allUsersAvailability).length;
-                const isCurrentUserInSlot =
-                  user && usersInSlot.some((u) => u.uid === user.uid);
-                const isAnyoneUnavailable = usersInSlot.some(
-                  (u) => u.type === "unavailable"
-                );
-                let bgColor =
-                  "bg-black/[0.015] dark:bg-white/[0.02] hover:bg-black/[0.04] dark:hover:bg-white/[0.05]";
-                if (isPast) {
-                  bgColor = "bg-black/[0.03] dark:bg-white/[0.03]";
-                } else if (isAnyoneUnavailable) {
-                  bgColor =
-                    "bg-red-500/10 hover:bg-red-500/[0.15] dark:bg-red-500/[0.15] dark:hover:bg-red-500/20";
-                } else if (
-                  totalUsersInGroup > 0 &&
-                  usersInSlot.length === totalUsersInGroup
-                ) {
-                  bgColor =
-                    "bg-green-500/[0.18] hover:bg-green-500/25 dark:bg-green-500/25 dark:hover:bg-green-500/30";
-                } else if (isCurrentUserInSlot) {
-                  bgColor =
-                    "bg-[#0071e3]/[0.12] hover:bg-[#0071e3]/20 dark:bg-[#0071e3]/25 dark:hover:bg-[#0071e3]/30";
-                } else if (usersInSlot.length > 0) {
-                  bgColor =
-                    "bg-amber-400/15 hover:bg-amber-400/25 dark:bg-amber-400/20 dark:hover:bg-amber-400/25";
-                }
-                return (
-                  <div
-                    key={day.toISOString()}
-                    onClick={() => handleSlotClick(day, time)}
-                    className={`snap-start h-14 sm:h-16 border-t border-l border-black/[0.05] dark:border-white/[0.06] transition-colors ${bgColor} p-1 ${
-                      isPast ? "pointer-events-none" : "cursor-pointer"
-                    }`}
-                  >
-                    <div className="flex -space-x-2">
-                      {usersInSlot
-                        .filter((u) => u.type === "available")
-                        .slice(0, 3)
-                        .map((u) => (
-                          <img
-                            key={u.uid}
-                            src={u.photoURL}
-                            alt={u.displayName}
-                            title={u.displayName}
-                            className="h-5 w-5 sm:h-6 sm:w-6 rounded-full border-2 border-white dark:border-[#1c1c1e] object-cover"
-                          />
-                        ))}
-                      {isAnyoneUnavailable && (
-                        <div className="h-5 w-5 sm:h-6 sm:w-6 rounded-full border-2 border-white dark:border-[#1c1c1e] bg-red-500 flex items-center justify-center text-[10px] font-bold text-white">
-                          !
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </React.Fragment>
-          ))}
+          className="sm:hidden mx-auto mb-3 h-1 w-9 rounded-full bg-overlay-strong"
+          aria-hidden="true"
+        />
+        <div className="flex items-start justify-between gap-3 mb-4">
+          <div className="min-w-0">
+            <h2 className="text-lg font-bold text-ink">{title}</h2>
+            {subtitle && <p className="text-sm text-muted mt-0.5">{subtitle}</p>}
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className={`${ICON_BTN} -mr-2 -mt-1 text-muted`}
+            aria-label="Close"
+          >
+            <X size={20} />
+          </button>
         </div>
-      </div>
-
-      <div className="border-t border-black/[0.06] dark:border-white/[0.08] px-3 py-3">
-        <div className={`flex flex-nowrap sm:flex-wrap overflow-x-auto sm:overflow-visible gap-x-4 gap-y-2 text-xs ${TEXT_SECONDARY}`}>
-          <div className="flex items-center gap-1.5 shrink-0">
-            <div className="w-3 h-3 rounded-full bg-[#0071e3]/20 border border-[#0071e3]/40"></div>
-            <span>You're free</span>
-          </div>
-          <div className="flex items-center gap-1.5 shrink-0">
-            <div className="w-3 h-3 rounded-full bg-amber-400/25 border border-amber-400/50"></div>
-            <span>Some free</span>
-          </div>
-          <div className="flex items-center gap-1.5 shrink-0">
-            <div className="w-3 h-3 rounded-full bg-green-500/25 border border-green-500/50"></div>
-            <span>Everyone free</span>
-          </div>
-          <div className="flex items-center gap-1.5 shrink-0">
-            <div className="w-3 h-3 rounded-full bg-red-500/15 border border-red-500/40"></div>
-            <span>Unavailable</span>
-          </div>
-        </div>
+        {children}
       </div>
     </div>
   );
 };
 
+const LegendItem = ({ swatch, label }) => (
+  <span className="inline-flex items-center gap-1.5">
+    <span className={`h-3 w-3 rounded-[4px] border border-hairline ${swatch}`} />
+    {label}
+  </span>
+);
+
+// --- Weekly view ---
+
+const WeeklyView = ({
+  weekStart,
+  today,
+  user,
+  slotIndex,
+  totalMembers,
+  showFullDay,
+  setShowFullDay,
+  onPrevWeek,
+  onNextWeek,
+  onSlotClick,
+  onDayClick,
+  mySlotDays,
+}) => {
+  const isWide = useMediaQuery("(min-width: 640px)");
+  const maxAvatars = isWide ? 3 : 2;
+  const days = useMemo(
+    () => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)),
+    [weekStart]
+  );
+  const hours = useMemo(
+    () =>
+      Array.from({ length: 24 }, (_, h) => h).filter(
+        (h) => showFullDay || h >= FIRST_WAKING_HOUR
+      ),
+    [showFullDay]
+  );
+  const gridCols =
+    "grid grid-cols-[2.75rem_repeat(7,minmax(0,1fr))] sm:grid-cols-[3.75rem_repeat(7,minmax(0,1fr))]";
+  const weekEnd = days[6];
+
+  return (
+    // overflow-clip (not hidden) keeps the rounded corners without creating a
+    // scroll container, so the header below can stick to the viewport.
+    <section className={`${CARD} overflow-clip`} aria-label="Week">
+      <div
+        className="sticky z-20 bg-surface border-b border-hairline"
+        style={{ top: "env(safe-area-inset-top)" }}
+      >
+        <div className="flex items-center justify-between px-2 pt-2">
+          <button onClick={onPrevWeek} className={ICON_BTN} aria-label="Previous week">
+            <ChevronLeft size={20} />
+          </button>
+          <h2 className="text-[15px] sm:text-base font-semibold text-ink tabular-nums">
+            {formatDay(weekStart, { month: "short", day: "numeric" })} –{" "}
+            {formatDay(weekEnd, {
+              month: weekEnd.getMonth() === weekStart.getMonth() ? undefined : "short",
+              day: "numeric",
+            })}
+            <span className="text-muted font-medium">
+              {", "}
+              {weekEnd.getFullYear()}
+            </span>
+          </h2>
+          <button onClick={onNextWeek} className={ICON_BTN} aria-label="Next week">
+            <ChevronRight size={20} />
+          </button>
+        </div>
+        <div className={`${gridCols} pb-1.5`}>
+          <div />
+          {days.map((day) => {
+            const isPast = day < today;
+            const isToday = day.getTime() === today.getTime();
+            const hasMine = mySlotDays.has(toDateKey(day));
+            return (
+              <button
+                key={day.getTime()}
+                type="button"
+                disabled={isPast}
+                onClick={() => onDayClick(day)}
+                aria-label={`${formatDay(day, {
+                  weekday: "long",
+                  month: "long",
+                  day: "numeric",
+                })} — whole-day options`}
+                className="group flex flex-col items-center gap-0.5 py-1 rounded-xl hover:bg-overlay active:bg-overlay-strong transition disabled:opacity-40 disabled:hover:bg-transparent"
+              >
+                <span
+                  className={`text-[11px] font-semibold uppercase tracking-wide ${
+                    isToday ? "text-accent" : "text-muted"
+                  }`}
+                >
+                  {formatDay(day, { weekday: "short" })}
+                </span>
+                <span
+                  className={`inline-flex items-center justify-center h-8 w-8 rounded-full text-[17px] font-semibold tabular-nums ${
+                    isToday ? "bg-accent text-white" : "text-ink"
+                  }`}
+                >
+                  {day.getDate()}
+                </span>
+                <span
+                  className={`h-1 w-1 rounded-full ${hasMine ? "bg-accent" : "bg-transparent"}`}
+                  aria-hidden="true"
+                />
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <button
+        type="button"
+        onClick={() => setShowFullDay(!showFullDay)}
+        aria-expanded={showFullDay}
+        className="w-full flex items-center justify-center gap-1.5 h-9 text-xs font-medium text-muted hover:text-ink hover:bg-overlay transition border-b border-hairline"
+      >
+        {showFullDay ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+        {showFullDay
+          ? "Hide early hours"
+          : `Show ${formatHour(0)} – ${formatHour(FIRST_WAKING_HOUR - 1)}`}
+      </button>
+
+      <div className={gridCols} role="group" aria-label="Hourly availability">
+        {hours.map((hour) => (
+          <React.Fragment key={hour}>
+            <div
+              className="flex items-center justify-end pr-1.5 sm:pr-2 text-[10px] sm:text-[11px] font-medium text-muted tabular-nums whitespace-nowrap"
+              aria-hidden="true"
+            >
+              {formatHour(hour)}
+            </div>
+            {days.map((day) => {
+              const isPast = day < today;
+              const people = slotIndex[slotIdFor(day, hour)] || [];
+              const { state, free, busy } = getSlotState(
+                people,
+                user?.uid,
+                totalMembers
+              );
+              const nameOf = (p) => (p.uid === user?.uid ? "You" : firstName(p.displayName));
+              const summary = busy.length
+                ? `busy: ${joinNames(busy.map(nameOf))}`
+                : state === "everyone"
+                ? "everyone free"
+                : free.length
+                ? `free: ${joinNames(free.map(nameOf))}`
+                : "no one yet";
+              const overflow = free.length > maxAvatars;
+              const shown = overflow ? free.slice(0, maxAvatars - 1) : free;
+              return (
+                <button
+                  key={day.getTime()}
+                  type="button"
+                  disabled={isPast}
+                  onClick={() => onSlotClick(day, hour)}
+                  aria-label={`${formatDay(day, { weekday: "long" })} ${formatHour(hour)}: ${summary}`}
+                  className={`relative h-11 sm:h-12 border-t border-l border-hairline p-1 flex items-center justify-center transition-colors ${
+                    isPast
+                      ? "bg-overlay/50 cursor-default"
+                      : `${SLOT_TINT[state]} ${
+                          state === "empty" ? "hover:bg-overlay" : "hover:brightness-[0.97] dark:hover:brightness-110"
+                        } active:brightness-90`
+                  }`}
+                >
+                  {(shown.length > 0 || busy.length > 0) && (
+                    <span className="flex -space-x-1.5">
+                      {shown.map((p) => (
+                        <Avatar
+                          key={p.uid}
+                          src={p.photoURL}
+                          name={p.displayName}
+                          size={isWide ? 22 : 18}
+                          ring
+                          className="animate-pop"
+                        />
+                      ))}
+                      {overflow && (
+                        <span
+                          className="inline-flex items-center justify-center rounded-full bg-ink text-surface ring-2 ring-surface text-[9px] font-bold tabular-nums animate-pop"
+                          style={{ width: isWide ? 22 : 18, height: isWide ? 22 : 18 }}
+                        >
+                          +{free.length - shown.length}
+                        </span>
+                      )}
+                      {busy.length > 0 && (
+                        <span
+                          className="inline-flex items-center justify-center rounded-full bg-busy text-white ring-2 ring-surface animate-pop"
+                          style={{ width: isWide ? 22 : 18, height: isWide ? 22 : 18 }}
+                        >
+                          <Ban size={isWide ? 12 : 10} strokeWidth={3} />
+                        </span>
+                      )}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </React.Fragment>
+        ))}
+      </div>
+
+      <div className="border-t border-hairline px-4 py-3 flex flex-wrap gap-x-4 gap-y-2 text-xs text-muted">
+        <LegendItem swatch={SLOT_TINT.you} label="You're free" />
+        <LegendItem swatch={SLOT_TINT.some} label="Others free" />
+        <LegendItem swatch={SLOT_TINT.everyone} label="Everyone free" />
+        <LegendItem swatch={SLOT_TINT.busy} label="Someone's busy" />
+      </div>
+    </section>
+  );
+};
+
+// --- Monthly view ---
+
 const MonthlyView = ({
   currentDate,
   setCurrentDate,
-  allUsersAvailability,
-  setView,
   today,
+  dayActivity,
+  bestDateKeys,
+  onPickDay,
 }) => {
   const month = currentDate.getMonth();
   const year = currentDate.getFullYear();
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const firstDayOfMonth = new Date(year, month, 1).getDay();
-  const calendarDays = useMemo(() => {
-    const days = [];
-    for (let i = 0; i < firstDayOfMonth; i++) {
-      days.push({ key: `blank-${i}`, blank: true });
-    }
-    for (let day = 1; day <= daysInMonth; day++) {
-      days.push({ key: day, day, date: new Date(year, month, day) });
-    }
-    return days;
-  }, [month, year, daysInMonth, firstDayOfMonth]);
-  const dayHasActivity = (day) => {
-    const dayString = toDateKey(day);
-    const activity = { available: false, unavailable: false };
-    Object.values(allUsersAvailability).forEach((userData) => {
-      userData.slots?.forEach((slot) => {
-        if (slot.id.startsWith(dayString)) {
-          if (slot.type === "available") activity.available = true;
-          if (slot.type === "unavailable") activity.unavailable = true;
-        }
-      });
-    });
-    return activity;
-  };
-  const handleDayClick = (date) => {
-    setCurrentDate(date);
-    setView("weekly");
-  };
+  const cells = useMemo(() => {
+    const leading = new Date(year, month, 1).getDay();
+    const count = new Date(year, month + 1, 0).getDate();
+    return [
+      ...Array.from({ length: leading }, () => null),
+      ...Array.from({ length: count }, (_, i) => new Date(year, month, i + 1)),
+    ];
+  }, [month, year]);
+  // Locale weekday initials, starting Sunday (Jan 1 2023 was a Sunday).
+  const weekdayLabels = useMemo(
+    () =>
+      Array.from({ length: 7 }, (_, i) =>
+        formatDay(new Date(2023, 0, 1 + i), { weekday: "short" })
+      ),
+    []
+  );
+
   return (
-    <div className={`${CARD} p-3 sm:p-4`}>
-      <div className="flex justify-between items-center mb-3 sm:mb-4">
+    <section className={`${CARD} p-2 sm:p-4`} aria-label="Month">
+      <div className="flex items-center justify-between mb-2">
         <button
           onClick={() => setCurrentDate(new Date(year, month - 1, 1))}
-          className={`${ICON_BTN} ${TEXT_PRIMARY}`}
+          className={ICON_BTN}
           aria-label="Previous month"
         >
           <ChevronLeft size={20} />
         </button>
-        <h2 className={`text-base sm:text-lg font-semibold text-center ${TEXT_PRIMARY}`}>
-          {currentDate.toLocaleDateString(undefined, {
-            month: "long",
-            year: "numeric",
-          })}
+        <h2 className="text-[15px] sm:text-base font-semibold text-ink">
+          {formatDay(currentDate, { month: "long", year: "numeric" })}
         </h2>
         <button
           onClick={() => setCurrentDate(new Date(year, month + 1, 1))}
-          className={`${ICON_BTN} ${TEXT_PRIMARY}`}
+          className={ICON_BTN}
           aria-label="Next month"
         >
           <ChevronRight size={20} />
         </button>
       </div>
-      <div className={`grid grid-cols-7 gap-1 text-center text-[11px] sm:text-sm font-semibold ${TEXT_SECONDARY} mb-2 uppercase tracking-wide`}>
-        {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => (
-          <div key={d}>{d}</div>
+      <div className="grid grid-cols-7 mb-1" aria-hidden="true">
+        {weekdayLabels.map((d) => (
+          <div
+            key={d}
+            className="text-center text-[11px] font-semibold uppercase tracking-wide text-muted py-1"
+          >
+            {d}
+          </div>
         ))}
       </div>
-      <div className="grid grid-cols-7 gap-1 sm:gap-2">
-        {calendarDays.map((dayInfo) => {
-          if (dayInfo.blank) return <div key={dayInfo.key}></div>;
-          const activity = dayHasActivity(dayInfo.date);
-          const isToday =
-            new Date().toDateString() === dayInfo.date.toDateString();
-          const isPast = dayInfo.date < today;
-          let dayBgColor = "hover:bg-black/[0.03] dark:hover:bg-white/[0.05]";
-          if (isPast) {
-            dayBgColor = "bg-black/[0.03] dark:bg-white/[0.03] opacity-50";
-          } else if (activity.unavailable && activity.available) {
-            dayBgColor =
-              "bg-amber-400/10 hover:bg-amber-400/[0.18] dark:bg-amber-400/[0.12] dark:hover:bg-amber-400/20";
-          } else if (activity.unavailable) {
-            dayBgColor =
-              "bg-red-500/[0.07] hover:bg-red-500/[0.12] dark:bg-red-500/[0.1] dark:hover:bg-red-500/[0.15]";
-          } else if (activity.available) {
-            dayBgColor =
-              "bg-green-500/10 hover:bg-green-500/[0.18] dark:bg-green-500/[0.15] dark:hover:bg-green-500/20";
-          }
+      <div className="grid grid-cols-7 gap-1">
+        {cells.map((date, i) => {
+          if (!date) return <div key={`blank-${i}`} />;
+          const key = toDateKey(date);
+          const isPast = date < today;
+          const isToday = date.getTime() === today.getTime();
+          const isBest = bestDateKeys.has(key);
+          const activity = dayActivity[key] || {};
           return (
-            <div
-              key={dayInfo.key}
-              onClick={() => !isPast && handleDayClick(dayInfo.date)}
-              className={`h-14 sm:h-24 p-1.5 sm:p-2 border rounded-2xl transition-colors flex flex-col ${dayBgColor} ${
-                isToday
-                  ? "border-[#0071e3] border-2"
-                  : "border-black/[0.05] dark:border-white/[0.06]"
-              } ${isPast ? "" : "cursor-pointer"}`}
+            <button
+              key={key}
+              type="button"
+              disabled={isPast}
+              onClick={() => onPickDay(date)}
+              aria-label={`${formatDay(date, { weekday: "long", month: "long", day: "numeric" })}${
+                isBest ? ", everyone free" : ""
+              }`}
+              className={`h-14 sm:h-20 rounded-xl flex flex-col items-center sm:items-start justify-between p-1.5 sm:p-2 transition disabled:opacity-35 active:scale-95 ${
+                isBest ? `${SLOT_TINT.everyone} hover:brightness-95` : "hover:bg-overlay"
+              }`}
             >
               <span
-                className={`text-sm sm:text-base font-semibold ${
-                  isToday ? "text-[#0071e3]" : TEXT_PRIMARY
+                className={`inline-flex items-center justify-center h-7 w-7 rounded-full text-sm font-semibold tabular-nums ${
+                  isToday ? "bg-accent text-white" : isBest ? "text-free-ink" : "text-ink"
                 }`}
               >
-                {dayInfo.day}
+                {date.getDate()}
               </span>
-              <div className="mt-auto flex gap-1">
-                {activity.available && (
-                  <span className="w-1.5 h-1.5 rounded-full bg-green-500"></span>
-                )}
-                {activity.unavailable && (
-                  <span className="w-1.5 h-1.5 rounded-full bg-red-500"></span>
-                )}
-              </div>
-            </div>
+              <span className="flex gap-1 h-1.5 sm:pl-1.5" aria-hidden="true">
+                {activity.you && <span className="h-1.5 w-1.5 rounded-full bg-accent" />}
+                {activity.others && <span className="h-1.5 w-1.5 rounded-full bg-some" />}
+                {activity.busy && <span className="h-1.5 w-1.5 rounded-full bg-busy" />}
+              </span>
+            </button>
           );
         })}
       </div>
+      <div className="border-t border-hairline mt-3 pt-3 px-2 flex flex-wrap gap-x-4 gap-y-2 text-xs text-muted">
+        <LegendItem swatch={SLOT_TINT.everyone} label="Everyone free" />
+        <span className="inline-flex items-center gap-1.5">
+          <span className="h-1.5 w-1.5 rounded-full bg-accent" /> You
+        </span>
+        <span className="inline-flex items-center gap-1.5">
+          <span className="h-1.5 w-1.5 rounded-full bg-some" /> Others
+        </span>
+        <span className="inline-flex items-center gap-1.5">
+          <span className="h-1.5 w-1.5 rounded-full bg-busy" /> Busy
+        </span>
+      </div>
+    </section>
+  );
+};
+
+// --- Whole-day actions (replaces the old tap-to-fill + copy modal) ---
+
+const DaySheet = ({ day, hasSlots, onSetDay, onRepeat, onClose }) => {
+  const [showRepeat, setShowRepeat] = useState(false);
+  const [duration, setDuration] = useState("month");
+  const [overwrite, setOverwrite] = useState(true);
+  const weekday = formatDay(day, { weekday: "long" });
+
+  const rowClass =
+    "w-full flex items-center gap-3 h-12 px-3 rounded-xl text-[15px] font-medium text-ink hover:bg-overlay active:bg-overlay-strong transition text-left";
+  const iconWrap = "inline-flex items-center justify-center h-8 w-8 rounded-full";
+
+  return (
+    <Sheet
+      title={formatDay(day, { weekday: "long", month: "long", day: "numeric" })}
+      subtitle="Set the whole day at once"
+      onClose={onClose}
+    >
+      <div className="space-y-1 -mx-1">
+        <button className={rowClass} onClick={() => onSetDay(day, "available")}>
+          <span className={`${iconWrap} bg-accent/15 text-accent`}>
+            <Check size={17} strokeWidth={2.5} />
+          </span>
+          Free all day
+        </button>
+        <button className={rowClass} onClick={() => onSetDay(day, "unavailable")}>
+          <span className={`${iconWrap} bg-busy/15 text-busy-ink`}>
+            <Ban size={16} strokeWidth={2.5} />
+          </span>
+          Busy all day
+        </button>
+        {hasSlots && (
+          <>
+            <button className={rowClass} onClick={() => onSetDay(day, null)}>
+              <span className={`${iconWrap} bg-overlay text-muted`}>
+                <Eraser size={16} />
+              </span>
+              Clear my day
+            </button>
+            <button
+              className={rowClass}
+              onClick={() => setShowRepeat(!showRepeat)}
+              aria-expanded={showRepeat}
+            >
+              <span className={`${iconWrap} bg-overlay text-muted`}>
+                <Repeat size={16} />
+              </span>
+              <span className="flex-1">Repeat every {weekday}</span>
+              <ChevronDown
+                size={18}
+                className={`text-muted transition-transform ${showRepeat ? "rotate-180" : ""}`}
+              />
+            </button>
+          </>
+        )}
+      </div>
+
+      {showRepeat && (
+        <div className="mt-3 p-4 rounded-2xl bg-overlay space-y-4 animate-fade-in">
+          <p className="text-sm text-muted">
+            Copies this {weekday}'s hours onto upcoming {weekday}s.
+          </p>
+          <Segmented
+            label="How far ahead"
+            value={duration}
+            onChange={setDuration}
+            className="w-full"
+            options={[
+              { value: "month", label: "Next month" },
+              { value: "3months", label: "Next 3 months" },
+            ]}
+          />
+          <label className="flex items-start gap-3 text-sm text-ink cursor-pointer">
+            <input
+              type="checkbox"
+              checked={overwrite}
+              onChange={(e) => setOverwrite(e.target.checked)}
+              className="mt-0.5 h-[18px] w-[18px] accent-[rgb(var(--accent))] shrink-0"
+            />
+            <span>
+              Replace anything already on those days
+              <span className="block text-muted text-xs mt-0.5">
+                Off keeps existing hours and only fills gaps.
+              </span>
+            </span>
+          </label>
+          <button
+            className={`${BTN_PRIMARY} w-full`}
+            onClick={() => onRepeat({ sourceDate: day, duration, overwrite })}
+          >
+            <Repeat size={16} /> Repeat schedule
+          </button>
+        </div>
+      )}
+    </Sheet>
+  );
+};
+
+// --- Account menu ---
+
+const AccountMenu = ({ user, themePref, setThemePref, onNewCalendar, onSignOut }) => {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e) => e.key === "Escape" && setOpen(false);
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open]);
+
+  const itemClass =
+    "w-full flex items-center gap-3 h-11 px-4 text-sm text-ink hover:bg-overlay active:bg-overlay-strong transition text-left";
+
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setOpen(!open)}
+        aria-label="Account menu"
+        aria-expanded={open}
+        aria-haspopup="menu"
+        className="rounded-full p-0.5 hover:ring-2 hover:ring-accent/40 active:scale-95 transition"
+      >
+        <Avatar src={user.photoURL} name={user.displayName} size={36} />
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} aria-hidden="true" />
+          <div
+            role="menu"
+            className={`absolute right-0 mt-2 w-64 ${CARD} shadow-float z-40 py-2 animate-menu-in`}
+          >
+            <div className="px-4 pt-1 pb-3 flex items-center gap-3 border-b border-hairline">
+              <Avatar src={user.photoURL} name={user.displayName} size={36} />
+              <div className="min-w-0">
+                <p className="font-semibold text-sm text-ink truncate">{user.displayName}</p>
+                <p className="text-xs text-muted truncate">{user.email}</p>
+              </div>
+            </div>
+            <div className="px-4 py-3 border-b border-hairline">
+              <p className="text-xs font-medium text-muted mb-2">Appearance</p>
+              <Segmented
+                label="Appearance"
+                value={themePref}
+                onChange={setThemePref}
+                className="w-full"
+                options={[
+                  { value: "system", icon: Monitor, ariaLabel: "Match system" },
+                  { value: "light", icon: Sun, ariaLabel: "Light" },
+                  { value: "dark", icon: Moon, ariaLabel: "Dark" },
+                ]}
+              />
+            </div>
+            <div className="pt-1">
+              <button role="menuitem" className={itemClass} onClick={onNewCalendar}>
+                <Plus size={17} className="text-muted" /> New calendar
+              </button>
+              <button role="menuitem" className={itemClass} onClick={onSignOut}>
+                <LogOut size={17} className="text-muted" /> Sign out
+              </button>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 };
 
-const CopyScheduleModal = ({ sourceDate, onApply, onCancel }) => {
-  const [duration, setDuration] = useState("month");
-  const [overwrite, setOverwrite] = useState(true);
+// --- "When everyone's free" ---
 
-  const handleApply = () => {
-    onApply({
-      sourceDate,
-      duration,
-      overwrite,
-    });
+const BestTimes = ({
+  bestTimes,
+  totalMembers,
+  eventNotes,
+  canEditNotes,
+  onEditNoteRequest,
+  onSaveNote,
+  onAddToCalendar,
+  onJumpTo,
+  onInvite,
+}) => {
+  const [editingKey, setEditingKey] = useState(null);
+  const [draft, setDraft] = useState("");
+
+  const startEditing = (dateKey) => {
+    if (!canEditNotes) {
+      onEditNoteRequest();
+      return;
+    }
+    setEditingKey(dateKey);
+    setDraft(eventNotes[dateKey]?.text || "");
+  };
+  const save = async (dateKey) => {
+    if (await onSaveNote(dateKey, draft)) setEditingKey(null);
   };
 
   return (
-    <div
-      className="fixed inset-0 bg-black/30 dark:bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center z-50"
-      onClick={onCancel}
-    >
-      <div
-        className="bg-white dark:bg-[#1c1c1e] border border-black/[0.06] dark:border-white/[0.08] shadow-[0_2px_20px_rgba(0,0,0,0.04)] dark:shadow-none rounded-t-[24px] sm:rounded-[20px] p-6 w-full sm:max-w-sm max-h-[90vh] overflow-y-auto"
-        style={{ paddingBottom: "calc(1.5rem + env(safe-area-inset-bottom))" }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <h2 className={`text-xl font-bold mb-4 ${TEXT_PRIMARY}`}>
-          Copy Schedule
-        </h2>
-        <p className={`mb-4 ${TEXT_SECONDARY} text-sm`}>
-          Apply the schedule from{" "}
-          <span className={`font-semibold ${TEXT_PRIMARY}`}>
-            {sourceDate.toLocaleDateString(undefined, {
-              weekday: "long",
-              month: "long",
-              day: "numeric",
-            })}
-          </span>{" "}
-          to future dates.
+    <section className={`${CARD} p-4`}>
+      <h3 className="text-base font-bold text-ink flex items-center gap-2">
+        When everyone's free
+        {bestTimes.length > 0 && (
+          <span className="text-xs font-semibold text-free-ink bg-free/15 rounded-full px-2 py-0.5 tabular-nums">
+            {bestTimes.length}
+          </span>
+        )}
+      </h3>
+
+      {totalMembers < 2 ? (
+        <div className="mt-2">
+          <p className="text-sm text-muted">
+            Once two or more people add their hours, the times that work for
+            everyone show up here.
+          </p>
+          {onInvite && (
+            <button className={`${BTN_SECONDARY} mt-3`} onClick={onInvite}>
+              <Share size={15} /> Invite friends
+            </button>
+          )}
+        </div>
+      ) : bestTimes.length === 0 ? (
+        <p className="text-sm text-muted mt-2">
+          No hour works for everyone yet. Matches appear here automatically as
+          people add their times.
         </p>
+      ) : (
+        <ul className="mt-2 -mx-1 divide-y divide-hairline">
+          {bestTimes.map(({ date, dateKey, ranges }) => {
+            const note = eventNotes[dateKey]?.text;
+            const isEditing = editingKey === dateKey;
+            return (
+              <li key={dateKey} className="py-2.5">
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => onJumpTo(date)}
+                    className="flex-1 min-w-0 flex items-center gap-3 text-left rounded-xl px-1 py-1 hover:bg-overlay active:bg-overlay-strong transition"
+                  >
+                    <span className="flex flex-col items-center justify-center h-12 w-11 rounded-xl bg-free/15 text-free-ink shrink-0">
+                      <span className="text-[10px] font-bold uppercase tracking-wide leading-none">
+                        {formatDay(date, { month: "short" })}
+                      </span>
+                      <span className="text-lg font-bold leading-tight tabular-nums">
+                        {date.getDate()}
+                      </span>
+                    </span>
+                    <span className="min-w-0">
+                      <span className="block text-[15px] font-semibold text-ink truncate">
+                        {relativeDayLabel(date)}
+                      </span>
+                      <span className="block text-sm text-muted tabular-nums truncate">
+                        {ranges.map(formatRange).join(", ")}
+                      </span>
+                      {note && !isEditing && (
+                        <span className="mt-1 flex items-start gap-1.5 text-sm text-ink">
+                          <StickyNote size={14} className="mt-0.5 shrink-0 text-muted" />
+                          <span className="break-words">{note}</span>
+                        </span>
+                      )}
+                    </span>
+                  </button>
+                  <div className="flex items-center shrink-0">
+                    <button
+                      onClick={() => (isEditing ? setEditingKey(null) : startEditing(dateKey))}
+                      className={`${ICON_BTN} text-muted`}
+                      aria-label={note ? "Edit plan note" : "Add a plan note"}
+                      title={note ? "Edit plan note" : "Add a plan note"}
+                    >
+                      <Pencil size={17} />
+                    </button>
+                    <button
+                      onClick={() => onAddToCalendar(date, ranges)}
+                      className={`${ICON_BTN} text-muted`}
+                      aria-label="Add to Google Calendar"
+                      title="Add to Google Calendar"
+                    >
+                      <CalendarPlus size={17} />
+                    </button>
+                  </div>
+                </div>
 
-        <div className="space-y-4">
-          <div>
-            <label className={`block text-sm font-medium ${TEXT_PRIMARY} mb-1`}>
-              Apply to:
-            </label>
-            <select
-              value={duration}
-              onChange={(e) => setDuration(e.target.value)}
-              className="w-full p-2.5 border border-black/10 dark:border-white/15 bg-white dark:bg-[#131316] text-[#1d1d1f] dark:text-white rounded-xl text-sm"
-            >
-              <option value="month">
-                Every{" "}
-                {sourceDate.toLocaleDateString(undefined, { weekday: "long" })}{" "}
-                for the next month
-              </option>
-              <option value="3months">
-                Every{" "}
-                {sourceDate.toLocaleDateString(undefined, { weekday: "long" })}{" "}
-                for the next 3 months
-              </option>
-            </select>
-          </div>
-          <div>
-            <label className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={overwrite}
-                onChange={(e) => setOverwrite(e.target.checked)}
-              />
-              <span className={`text-sm ${TEXT_SECONDARY}`}>
-                Overwrite existing entries on those days
-              </span>
-            </label>
-          </div>
-        </div>
-
-        <div className="mt-6 flex justify-end gap-3">
-          <button
-            onClick={onCancel}
-            className="px-4 py-2.5 bg-black/[0.05] dark:bg-white/10 text-[#1d1d1f] dark:text-white font-medium rounded-full hover:bg-black/[0.08] dark:hover:bg-white/[0.15] transition-colors"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={handleApply}
-            className="px-4 py-2.5 bg-[#0071e3] text-white font-medium rounded-full hover:bg-[#0077ED] active:bg-[#0060c9] transition-colors"
-          >
-            Apply
-          </button>
-        </div>
-      </div>
-    </div>
+                {isEditing && (
+                  <form
+                    className="mt-2 ml-1 space-y-2 animate-fade-in"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      save(dateKey);
+                    }}
+                  >
+                    <textarea
+                      value={draft}
+                      onChange={(e) => setDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && !e.shiftKey) {
+                          e.preventDefault();
+                          save(dateKey);
+                        } else if (e.key === "Escape") {
+                          setEditingKey(null);
+                        }
+                      }}
+                      placeholder="What's the plan? e.g. Dinner at Mike's, 7pm"
+                      aria-label="Plan note"
+                      maxLength={140}
+                      rows={2}
+                      autoFocus
+                      className="w-full text-base sm:text-sm p-3 rounded-xl border border-hairline bg-canvas text-ink placeholder:text-muted focus:outline-none focus:ring-2 focus:ring-accent/40 resize-none"
+                    />
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs text-muted tabular-nums">
+                        {draft.length}/140
+                      </span>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          className={BTN_SECONDARY}
+                          onClick={() => setEditingKey(null)}
+                        >
+                          Cancel
+                        </button>
+                        <button type="submit" className={`${BTN_PRIMARY} h-10 px-4 text-sm`}>
+                          Save
+                        </button>
+                      </div>
+                    </div>
+                  </form>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
   );
 };
 
@@ -599,47 +1030,25 @@ const App = () => {
   const [allUsersAvailability, setAllUsersAvailability] = useState({});
   const [eventNotes, setEventNotes] = useState({});
   const [currentDate, setCurrentDate] = useState(new Date());
-  const [notification, setNotification] = useState("");
-  const [isProfileOpen, setIsProfileOpen] = useState(false);
-  const [view, setView] = useState(() => {
-    try {
-      return localStorage.getItem("wayf_view") || "weekly";
-    } catch (error) {
-      return "weekly";
-    }
-  });
-  const [selectionMode, setSelectionMode] = useState(() => {
-    try {
-      return localStorage.getItem("wayf_selectionMode") || "available";
-    } catch (error) {
-      return "available";
-    }
-  });
-  const [showFullDay, setShowFullDay] = useState(() => {
-    try {
-      return localStorage.getItem("wayf_showFullDay") === "true";
-    } catch (error) {
-      return false;
-    }
-  });
-  const [darkMode, setDarkMode] = useState(() => {
-    try {
-      const saved = localStorage.getItem("wayf_darkMode");
-      if (saved !== null) return saved === "true";
-      return (
-        window.matchMedia &&
-        window.matchMedia("(prefers-color-scheme: dark)").matches
-      );
-    } catch (error) {
-      return false;
-    }
-  });
-  const [copyModalInfo, setCopyModalInfo] = useState({
-    isOpen: false,
-    sourceDate: null,
-  });
-  const [expandedNoteDate, setExpandedNoteDate] = useState(null);
-  const [noteDraft, setNoteDraft] = useState("");
+  const [toast, setToast] = useState(null);
+  const [daySheetDate, setDaySheetDate] = useState(null);
+  const [view, setView] = useStoredState("wayf_view", "weekly");
+  const [selectionMode, setSelectionMode] = useStoredState(
+    "wayf_selectionMode",
+    "available"
+  );
+  const [showFullDayRaw, setShowFullDayRaw] = useStoredState(
+    "wayf_showFullDay",
+    "false"
+  );
+  const showFullDay = showFullDayRaw === "true";
+  const setShowFullDay = (v) => setShowFullDayRaw(String(v));
+  // "system" follows the OS; "light"/"dark" are explicit overrides. The same
+  // logic runs in an inline script in index.html so there's no flash on load.
+  const [themePref, setThemePref] = useStoredState("wayf_theme", "system");
+  const systemDark = useMediaQuery("(prefers-color-scheme: dark)");
+  const isDark = themePref === "dark" || (themePref === "system" && systemDark);
+
   const today = useMemo(() => {
     const d = new Date();
     d.setHours(0, 0, 0, 0);
@@ -647,61 +1056,27 @@ const App = () => {
   }, []);
 
   // Single toast timer so a new message isn't cut short by an older one's
-  // timeout. Duration matches the fade-in-out animation.
-  const notificationTimerRef = useRef(null);
-  const notify = (message) => {
-    clearTimeout(notificationTimerRef.current);
-    setNotification(message);
-    notificationTimerRef.current = setTimeout(() => setNotification(""), 3000);
+  // timeout. Toasts with an action (e.g. Undo) stay up a little longer.
+  const toastTimerRef = useRef(null);
+  const notify = (message, action) => {
+    clearTimeout(toastTimerRef.current);
+    setToast({ id: Date.now(), message, action });
+    toastTimerRef.current = setTimeout(() => setToast(null), action ? 6000 : 3000);
   };
-  useEffect(() => () => clearTimeout(notificationTimerRef.current), []);
-
-  // Remember the person's last-used view / mode / full-day preference locally.
-  useEffect(() => {
-    try {
-      localStorage.setItem("wayf_view", view);
-    } catch (error) {
-      // Ignore storage errors (e.g. private browsing).
-    }
-  }, [view]);
+  useEffect(() => () => clearTimeout(toastTimerRef.current), []);
 
   useEffect(() => {
-    try {
-      localStorage.setItem("wayf_selectionMode", selectionMode);
-    } catch (error) {
-      // Ignore storage errors.
-    }
-  }, [selectionMode]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem("wayf_showFullDay", String(showFullDay));
-    } catch (error) {
-      // Ignore storage errors.
-    }
-  }, [showFullDay]);
-
-  // Toggle the `dark` class on <html> so Tailwind's class-based dark mode
-  // picks it up everywhere, and remember the choice.
-  useEffect(() => {
-    const root = document.documentElement;
-    if (darkMode) {
-      root.classList.add("dark");
-    } else {
-      root.classList.remove("dark");
-    }
-    try {
-      localStorage.setItem("wayf_darkMode", String(darkMode));
-    } catch (error) {
-      // Ignore storage errors.
-    }
-  }, [darkMode]);
+    document.documentElement.classList.toggle("dark", isDark);
+    document
+      .querySelectorAll('meta[name="theme-color"]')
+      .forEach((m) => m.setAttribute("content", isDark ? "#000000" : "#f5f5f7"));
+  }, [isDark]);
 
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     let id = urlParams.get("id");
     if (!id) {
-      id = Math.random().toString(36).substring(2, 10);
+      id = newGroupId();
       const newUrl = `${window.location.pathname}?id=${id}${window.location.hash}`;
       try {
         window.history.replaceState({ path: newUrl }, "", newUrl);
@@ -728,19 +1103,13 @@ const App = () => {
 
   useEffect(() => {
     if (!isAuthReady || !db || !groupId) return;
-    const availabilityCollection = collection(
-      db,
-      "groups",
-      groupId,
-      "availability"
-    );
-    const q = query(availabilityCollection);
+    const availabilityCollection = collection(db, "groups", groupId, "availability");
     const unsubscribe = onSnapshot(
-      q,
+      query(availabilityCollection),
       (querySnapshot) => {
         const availabilityData = {};
-        querySnapshot.forEach((doc) => {
-          availabilityData[doc.id] = doc.data();
+        querySnapshot.forEach((d) => {
+          availabilityData[d.id] = d.data();
         });
         setAllUsersAvailability(availabilityData);
       },
@@ -755,13 +1124,12 @@ const App = () => {
   useEffect(() => {
     if (!isAuthReady || !db || !groupId) return;
     const notesCollection = collection(db, "groups", groupId, "eventNotes");
-    const q = query(notesCollection);
     const unsubscribe = onSnapshot(
-      q,
+      query(notesCollection),
       (querySnapshot) => {
         const notesData = {};
-        querySnapshot.forEach((doc) => {
-          notesData[doc.id] = doc.data();
+        querySnapshot.forEach((d) => {
+          notesData[d.id] = d.data();
         });
         setEventNotes(notesData);
       },
@@ -772,19 +1140,115 @@ const App = () => {
     return () => unsubscribe();
   }, [isAuthReady, db, groupId]);
 
+  // --- Derived data ---
+
+  const totalMembers = Object.keys(allUsersAvailability).length;
+  const mySlots = useMemo(
+    () => (user && allUsersAvailability[user.uid]?.slots) || [],
+    [allUsersAvailability, user]
+  );
+  const mySlotDays = useMemo(
+    () => new Set(mySlots.map((s) => s.id.split("T")[0])),
+    [mySlots]
+  );
+
+  // slotId -> people in that hour. Built once per snapshot instead of
+  // scanning every member's slots for every cell.
+  const slotIndex = useMemo(() => {
+    const index = {};
+    Object.entries(allUsersAvailability).forEach(([uid, userData]) => {
+      (userData.slots || []).forEach((slot) => {
+        (index[slot.id] ||= []).push({
+          uid,
+          displayName: userData.displayName,
+          photoURL: userData.photoURL,
+          type: slot.type,
+        });
+      });
+    });
+    return index;
+  }, [allUsersAvailability]);
+
+  // Per-day summary for the month view dots.
+  const dayActivity = useMemo(() => {
+    const activity = {};
+    Object.entries(slotIndex).forEach(([slotId, people]) => {
+      const key = slotId.split("T")[0];
+      const a = (activity[key] ||= {});
+      people.forEach((p) => {
+        if (p.type === "unavailable") a.busy = true;
+        else if (p.uid === user?.uid) a.you = true;
+        else a.others = true;
+      });
+    });
+    return activity;
+  }, [slotIndex, user]);
+
+  // Upcoming dates with at least one hour where every member (2+) is free,
+  // each with its contiguous free ranges as [startHour, endHour) pairs.
+  const bestTimes = useMemo(() => {
+    if (totalMembers < 2) return [];
+    const todayKey = toDateKey(today);
+    const hoursByDate = {};
+    Object.entries(slotIndex).forEach(([slotId, people]) => {
+      const [dateKey, time] = slotId.split("T");
+      if (dateKey < todayKey) return;
+      const freeUids = new Set(
+        people.filter((p) => p.type === "available").map((p) => p.uid)
+      );
+      if (freeUids.size === totalMembers) {
+        (hoursByDate[dateKey] ||= []).push(Number(time.split(":")[0]));
+      }
+    });
+    return Object.keys(hoursByDate)
+      .sort()
+      .map((dateKey) => {
+        const hours = [...new Set(hoursByDate[dateKey])].sort((a, b) => a - b);
+        const ranges = [];
+        hours.forEach((h) => {
+          const last = ranges[ranges.length - 1];
+          if (last && last[1] === h) last[1] = h + 1;
+          else ranges.push([h, h + 1]);
+        });
+        return { date: fromDateKey(dateKey), dateKey, ranges };
+      });
+  }, [slotIndex, totalMembers, today]);
+  const bestDateKeys = useMemo(
+    () => new Set(bestTimes.map((b) => b.dateKey)),
+    [bestTimes]
+  );
+
+  const weekStart = useMemo(() => startOfWeek(currentDate), [currentDate]);
+  const isViewingToday =
+    view === "weekly"
+      ? today >= weekStart && today < addDays(weekStart, 7)
+      : currentDate.getMonth() === today.getMonth() &&
+        currentDate.getFullYear() === today.getFullYear();
+
+  // --- Actions ---
+
   const handleSignIn = async () => {
     if (!auth) return;
-    const provider = new GoogleAuthProvider();
     try {
-      await signInWithPopup(auth, provider);
+      await signInWithPopup(auth, new GoogleAuthProvider());
     } catch (error) {
+      if (
+        error.code === "auth/popup-closed-by-user" ||
+        error.code === "auth/cancelled-popup-request"
+      ) {
+        return;
+      }
       console.error("Google sign-in failed:", error);
+      notify(
+        error.code === "auth/popup-blocked"
+          ? "Pop-up blocked. Allow pop-ups for this site to sign in."
+          : "Couldn't sign in. Please try again."
+      );
     }
   };
   const handleSignOut = async () => {
     if (!auth) return;
     await signOut(auth);
-    setIsProfileOpen(false);
   };
 
   // Writes the signed-in user's full slot list (or removes them from the
@@ -808,196 +1272,138 @@ const App = () => {
       return true;
     } catch (error) {
       console.error("Error saving availability:", error);
-      notify("Couldn't save your changes — check your connection.");
+      notify("Couldn't save your changes. Check your connection.");
       return false;
     }
   };
 
-  const handleSlotClick = async (day, time) => {
+  // Saves a bulk change and offers to put the previous slots back.
+  const saveWithUndo = async (nextSlots, message) => {
+    const previous = mySlots;
+    if (!(await saveMySlots(nextSlots))) return false;
+    notify(message, {
+      label: "Undo",
+      onClick: async () => {
+        if (await saveMySlots(previous)) notify("Change undone.");
+      },
+    });
+    return true;
+  };
+
+  const handleSlotClick = async (day, hour) => {
     if (day < today) return;
     if (!user) {
       handleSignIn();
       return;
     }
     if (!db || !groupId) return;
-    const slotId = `${toDateKey(day)}T${time}`;
-    const currentUserData = allUsersAvailability[user.uid] || { slots: [] };
-    const existingSlot = currentUserData.slots.find((s) => s.id === slotId);
+    const slotId = slotIdFor(day, hour);
+    const existingSlot = mySlots.find((s) => s.id === slotId);
     // Someone else blocking a slot stops you adding to it, but you can always
     // change or clear your own entry.
-    const blockedByOther = getUsersInSlot(day, time).some(
-      (u) => u.type === "unavailable" && u.uid !== user.uid
+    const blocker = (slotIndex[slotId] || []).find(
+      (p) => p.type === "unavailable" && p.uid !== user.uid
     );
-    if (blockedByOther && !existingSlot) {
-      notify("This slot is blocked by another user.");
+    if (blocker && !existingSlot) {
+      notify(`${firstName(blocker.displayName)} is busy then.`);
       return;
     }
     let newSlots;
     if (existingSlot) {
-      if (existingSlot.type === selectionMode) {
-        newSlots = currentUserData.slots.filter((s) => s.id !== slotId);
-      } else {
-        newSlots = currentUserData.slots.map((s) =>
-          s.id === slotId ? { ...s, type: selectionMode } : s
-        );
-      }
+      newSlots =
+        existingSlot.type === selectionMode
+          ? mySlots.filter((s) => s.id !== slotId)
+          : mySlots.map((s) => (s.id === slotId ? { ...s, type: selectionMode } : s));
     } else {
-      newSlots = [
-        ...currentUserData.slots,
-        { id: slotId, type: selectionMode },
-      ];
+      newSlots = [...mySlots, { id: slotId, type: selectionMode }];
     }
     await saveMySlots(newSlots);
   };
 
-  const handleDayClick = async (day) => {
+  const handleDayClick = (day) => {
     if (day < today) return;
     if (!user) {
       handleSignIn();
       return;
     }
-    if (!db || !groupId) return;
-    const dayString = toDateKey(day);
-    const currentUserData = allUsersAvailability[user.uid] || { slots: [] };
-    const otherDaySlots = currentUserData.slots.filter(
-      (slot) => !slot.id.startsWith(dayString)
-    );
-    const thisDaySlots = currentUserData.slots.filter((slot) =>
-      slot.id.startsWith(dayString)
-    );
-    // Only toggle off when the whole day is already in the *current* mode;
-    // otherwise (e.g. all-available while in Unavailable mode) switch it over.
-    const isDayAlreadySelected =
-      thisDaySlots.length === 24 &&
-      thisDaySlots.every((slot) => slot.type === selectionMode);
-    let finalSlots;
-    if (isDayAlreadySelected) {
-      finalSlots = otherDaySlots;
-    } else {
-      const newDaySlots = Array(24)
-        .fill(0)
-        .map((_, i) => {
-          const hour = i.toString().padStart(2, "0");
-          return { id: `${dayString}T${hour}:00`, type: selectionMode };
-        });
-      finalSlots = [...otherDaySlots, ...newDaySlots];
-    }
-    await saveMySlots(finalSlots);
+    setDaySheetDate(day);
   };
 
-  const handleApplyCopy = async ({ sourceDate, duration, overwrite }) => {
+  // type: "available" | "unavailable" | null (clear).
+  const handleSetDay = async (day, type) => {
     if (!user || !db || !groupId) return;
-
-    const sourceDayString = toDateKey(sourceDate);
-    const sourceSlots = (allUsersAvailability[user.uid]?.slots || []).filter(
-      (s) => s.id.startsWith(sourceDayString)
+    const dayKey = toDateKey(day);
+    const otherDays = mySlots.filter((s) => !s.id.startsWith(dayKey));
+    const dayLabel = formatDay(day, { weekday: "long" });
+    const next = type
+      ? [
+          ...otherDays,
+          ...Array.from({ length: 24 }, (_, h) => ({ id: slotIdFor(day, h), type })),
+        ]
+      : otherDays;
+    setDaySheetDate(null);
+    await saveWithUndo(
+      next,
+      type === "available"
+        ? `${dayLabel} marked free all day.`
+        : type === "unavailable"
+        ? `${dayLabel} marked busy all day.`
+        : `${dayLabel} cleared.`
     );
+  };
+
+  const handleRepeatDay = async ({ sourceDate, duration, overwrite }) => {
+    if (!user || !db || !groupId) return;
+    const sourceDayKey = toDateKey(sourceDate);
+    const sourceSlots = mySlots.filter((s) => s.id.startsWith(sourceDayKey));
     if (sourceSlots.length === 0) return;
 
-    const sourceDayOfWeek = sourceDate.getDay();
     const endDate = new Date(sourceDate);
     endDate.setMonth(endDate.getMonth() + (duration === "month" ? 1 : 3));
-
     const targetDates = [];
-    let currentDateIterator = new Date(sourceDate);
-    currentDateIterator.setDate(currentDateIterator.getDate() + 1); // Start from the next day
-
-    while (currentDateIterator < endDate) {
-      if (currentDateIterator.getDay() === sourceDayOfWeek) {
-        targetDates.push(new Date(currentDateIterator));
-      }
-      currentDateIterator.setDate(currentDateIterator.getDate() + 1);
+    for (let d = addDays(sourceDate, 7); d < endDate; d = addDays(d, 7)) {
+      targetDates.push(d);
     }
 
-    const currentUserData = allUsersAvailability[user.uid] || { slots: [] };
-    let finalSlots = [...currentUserData.slots];
-
+    let finalSlots = [...mySlots];
     if (overwrite) {
-      const targetDateStrings = targetDates.map(toDateKey);
+      const targetKeys = targetDates.map(toDateKey);
       finalSlots = finalSlots.filter(
-        (slot) =>
-          !targetDateStrings.some((dateStr) => slot.id.startsWith(dateStr))
+        (slot) => !targetKeys.some((key) => slot.id.startsWith(key))
       );
     }
-
     // Without overwrite, keep existing entries and skip ones already present
     // so the same slot never appears twice (which would double-count it).
     const existingIds = new Set(finalSlots.map((slot) => slot.id));
     targetDates.forEach((date) => {
-      const targetDayString = toDateKey(date);
+      const targetKey = toDateKey(date);
       sourceSlots.forEach((sourceSlot) => {
-        const time = sourceSlot.id.split("T")[1];
-        const id = `${targetDayString}T${time}`;
+        const id = `${targetKey}T${sourceSlot.id.split("T")[1]}`;
         if (existingIds.has(id)) return;
         existingIds.add(id);
         finalSlots.push({ id, type: sourceSlot.type });
       });
     });
 
-    if (!(await saveMySlots(finalSlots))) return;
-
-    setCopyModalInfo({ isOpen: false, sourceDate: null });
-    notify("Schedule copied successfully!");
-  };
-
-  const getUsersInSlot = (day, time) => {
-    const slotId = `${toDateKey(day)}T${time}`;
-    return Object.entries(allUsersAvailability).flatMap(([uid, userData]) => {
-      const slot = userData.slots?.find((s) => s.id === slotId);
-      return slot
-        ? [
-            {
-              uid,
-              displayName: userData.displayName,
-              photoURL: userData.photoURL,
-              type: slot.type,
-            },
-          ]
-        : [];
-    });
-  };
-
-  // Dates where every current group member has marked themselves available
-  // for at least one hour, excluding dates that have already passed.
-  const bestTimes = useMemo(() => {
-    const members = Object.values(allUsersAvailability);
-    if (members.length === 0) return [];
-    const availableCounts = {};
-    members.forEach((userData) => {
-      // De-dupe per person so a repeated slot can't count twice.
-      new Set(
-        (userData.slots || [])
-          .filter((slot) => slot.type === "available")
-          .map((slot) => slot.id)
-      ).forEach((id) => {
-        availableCounts[id] = (availableCounts[id] || 0) + 1;
-      });
-    });
-    const todayKey = toDateKey(today);
-    const dateKeys = new Set(
-      Object.entries(availableCounts)
-        .filter(([, count]) => count === members.length)
-        .map(([id]) => id.split("T")[0])
-        .filter((dateKey) => dateKey >= todayKey)
+    setDaySheetDate(null);
+    const weekday = formatDay(sourceDate, { weekday: "long" });
+    await saveWithUndo(
+      finalSlots,
+      `Copied to the next ${targetDates.length} ${weekday}s.`
     );
-    return [...dateKeys].sort().map((dateKey) => {
-      const [y, m, d] = dateKey.split("-").map(Number);
-      return new Date(y, m - 1, d);
-    });
-  }, [allUsersAvailability, today]);
+  };
 
   const copyShareLink = () => {
     navigator.clipboard
       .writeText(window.location.href)
-      .then(() => notify("Share link copied!"))
-      .catch(() => notify("Couldn't copy — copy the address bar instead."));
+      .then(() => notify("Invite link copied. Paste it in your group chat."))
+      .catch(() => notify("Couldn't copy. Copy the address bar instead."));
   };
 
   const handleShare = async () => {
-    setIsProfileOpen(false);
     const shareData = {
       title: "When Are You Free?",
-      text: "Mark your availability so we can find a time to meet!",
+      text: "Add your free times so we can find a day that works for everyone.",
       url: window.location.href,
     };
     if (navigator.share) {
@@ -1012,408 +1418,298 @@ const App = () => {
   };
 
   const handleNewCalendar = () => {
-    const newId = Math.random().toString(36).substring(2, 10);
-    window.location.href = `${window.location.pathname}?id=${newId}`;
+    window.location.href = `${window.location.pathname}?id=${newGroupId()}`;
   };
 
-  const generateGoogleCalendarLink = (date) => {
-    const T = (n) => (n < 10 ? "0" + n : n);
-    const d = new Date(date);
-    const d2 = new Date(d);
-    d2.setDate(d.getDate() + 1);
-    const startDate = `${d.getFullYear()}${T(d.getMonth() + 1)}${T(
-      d.getDate()
-    )}`;
-    const endDate = `${d2.getFullYear()}${T(d2.getMonth() + 1)}${T(
-      d2.getDate()
-    )}`;
-    const noteText = eventNotes[toDateKey(d)]?.text;
+  // Opens Google Calendar pre-filled with the longest window everyone's free,
+  // in the viewer's own timezone.
+  const addToGoogleCalendar = (date, ranges) => {
+    const [start, end] = ranges.reduce((best, r) =>
+      r[1] - r[0] > best[1] - best[0] ? r : best
+    );
+    const stamp = (hour) => {
+      const d = addDays(date, Math.floor(hour / 24));
+      return `${toDateKey(d).replace(/-/g, "")}T${String(hour % 24).padStart(2, "0")}0000`;
+    };
+    const noteText = eventNotes[toDateKey(date)]?.text;
     const details = noteText
-      ? `${noteText} (Plan created using WhenAreYouFree.com)`
-      : "Plan created using WhenAreYouFree.com";
-    const url = `https://www.google.com/calendar/render?action=TEMPLATE&text=Hangout+with+Friends&dates=${startDate}/${endDate}&details=${encodeURIComponent(
-      details
-    )}`;
-    window.open(url, "_blank", "noopener");
+      ? `${noteText}\n\nPlanned with When Are You Free?: ${window.location.href}`
+      : `Planned with When Are You Free?: ${window.location.href}`;
+    const params = new URLSearchParams({
+      action: "TEMPLATE",
+      text: noteText || "Hangout with friends",
+      dates: `${stamp(start)}/${stamp(end)}`,
+      ctz: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      details,
+    });
+    window.open(
+      `https://calendar.google.com/calendar/render?${params}`,
+      "_blank",
+      "noopener"
+    );
   };
 
-  const openNoteEditor = (dateString) => {
-    if (!user) {
-      handleSignIn();
-      return;
-    }
-    setExpandedNoteDate(dateString);
-    setNoteDraft(eventNotes[dateString]?.text || "");
-  };
-
-  const closeNoteEditor = () => {
-    setExpandedNoteDate(null);
-    setNoteDraft("");
-  };
-
-  const saveEventNote = async (dateString) => {
-    if (!user || !db || !groupId) return;
-    const noteDocRef = doc(db, "groups", groupId, "eventNotes", dateString);
-    const trimmed = noteDraft.trim();
+  const saveEventNote = async (dateKey, text) => {
+    if (!user || !db || !groupId) return false;
+    const noteDocRef = doc(db, "groups", groupId, "eventNotes", dateKey);
+    const trimmed = text.trim();
     try {
       if (!trimmed) {
         await deleteDoc(noteDocRef);
       } else {
         await setDoc(
           noteDocRef,
-          {
-            text: trimmed,
-            updatedBy: user.displayName,
-            updatedAt: Date.now(),
-          },
+          { text: trimmed, updatedBy: user.displayName, updatedAt: Date.now() },
           { merge: true }
         );
       }
-      closeNoteEditor();
+      return true;
     } catch (error) {
       console.error("Error saving event note:", error);
-      notify("Couldn't save the note — check your connection.");
+      notify("Couldn't save the note. Check your connection.");
+      return false;
     }
+  };
+
+  const jumpToDay = (date) => {
+    setCurrentDate(date);
+    setView("weekly");
+    window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
   if (!isAuthReady || !groupId) {
     return (
-      <div className="flex items-center justify-center min-h-screen bg-[#f5f5f7] dark:bg-black">
-        <div className="flex flex-col items-center gap-3 text-[#86868b]">
-          <Loader2 size={28} className="animate-spin" />
-          <p className="text-sm">Loading your calendar…</p>
+      <div className="flex items-center justify-center min-h-dvh bg-canvas">
+        <div className="flex flex-col items-center gap-3 text-muted">
+          <Loader2 size={24} className="animate-spin" />
+          <p className="text-sm">Loading calendar…</p>
         </div>
       </div>
     );
   }
 
-  const totalMembers = Object.keys(allUsersAvailability).length;
+  const members = Object.entries(allUsersAvailability);
 
   return (
-    <div className={`bg-[#f5f5f7] dark:bg-black min-h-screen font-sans ${TEXT_PRIMARY} pb-24 sm:pb-6`}>
-      {copyModalInfo.isOpen && (
-        <CopyScheduleModal
-          sourceDate={copyModalInfo.sourceDate}
-          onApply={handleApplyCopy}
-          onCancel={() => setCopyModalInfo({ isOpen: false, sourceDate: null })}
+    <div className="bg-canvas min-h-dvh font-sans text-ink pb-28 sm:pb-10">
+      {daySheetDate && (
+        <DaySheet
+          day={daySheetDate}
+          hasSlots={mySlotDays.has(toDateKey(daySheetDate))}
+          onSetDay={handleSetDay}
+          onRepeat={handleRepeatDay}
+          onClose={() => setDaySheetDate(null)}
         />
       )}
 
-      <header
-        className="sticky top-0 z-30 bg-white/80 dark:bg-black/60 backdrop-blur-xl border-b border-black/[0.06] dark:border-white/[0.08]"
-        style={{ paddingTop: "env(safe-area-inset-top)" }}
-      >
-        <div className="max-w-screen-xl mx-auto px-3 sm:px-6 py-3 flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <h1 className={`text-lg sm:text-2xl font-bold tracking-tight ${TEXT_PRIMARY} truncate`}>
+      <header style={{ paddingTop: "env(safe-area-inset-top)" }}>
+        <div className="max-w-5xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
+            <AppMark />
+            <h1 className="text-base sm:text-xl font-bold tracking-tight text-ink truncate">
               When Are You Free?
             </h1>
-            <p className={`hidden sm:block ${TEXT_SECONDARY} text-sm`}>
-              Select a mode, then tap a time or day to mark it.
-            </p>
           </div>
-          <div className="shrink-0 flex items-center gap-2">
-            <button
-              onClick={() => setDarkMode(!darkMode)}
-              className={`${ICON_BTN} ${TEXT_PRIMARY}`}
-              aria-label={darkMode ? "Switch to light mode" : "Switch to dark mode"}
-              title={darkMode ? "Switch to light mode" : "Switch to dark mode"}
-            >
-              {darkMode ? <Sun size={19} /> : <Moon size={19} />}
-            </button>
-            {!user ? (
-              <button
-                onClick={handleSignIn}
-                className="flex items-center gap-2 bg-white dark:bg-[#1c1c1e] text-[#1d1d1f] dark:text-white font-semibold py-2.5 px-4 rounded-full border border-black/10 dark:border-white/15 hover:bg-black/[0.02] dark:hover:bg-white/[0.05] active:bg-black/[0.05] transition-colors text-sm"
-              >
-                <img
-                  src="https://www.google.com/favicon.ico"
-                  alt="Google icon"
-                  className="w-4 h-4 sm:w-5 sm:h-5"
-                />
-                <span className="hidden sm:inline">Sign in with Google</span>
-                <span className="sm:hidden">Sign in</span>
+          {user ? (
+            <div className="flex items-center gap-2 shrink-0">
+              <button onClick={handleShare} className={`${BTN_SECONDARY} h-9 px-3.5`}>
+                <Share size={15} /> Invite
               </button>
-            ) : (
-              <div className="relative">
-                <button
-                  onClick={() => setIsProfileOpen(!isProfileOpen)}
-                  className="rounded-full h-10 w-10 overflow-hidden border-2 border-transparent hover:border-[#0071e3]/50 transition-colors"
-                >
-                  <img
-                    src={user.photoURL}
-                    alt={user.displayName || "User"}
-                    className="h-full w-full object-cover"
-                    onError={(e) => {
-                      e.target.onerror = null;
-                      e.target.src = `https://placehold.co/40x40/E2E8F0/4A5568?text=${
-                        user.displayName?.charAt(0) || "U"
-                      }`;
-                    }}
-                  />
-                </button>
-                {isProfileOpen && (
-                  <div className={`absolute right-0 mt-2 w-56 ${CARD} z-20 py-2`}>
-                    <div className="px-4 py-2 border-b border-black/[0.06] dark:border-white/[0.08]">
-                      <p className={`font-bold truncate text-sm ${TEXT_PRIMARY}`}>
-                        {user.displayName}
-                      </p>
-                      <p className={`text-xs truncate ${TEXT_SECONDARY}`}>
-                        {user.email}
-                      </p>
-                    </div>
-                    <button
-                      onClick={handleNewCalendar}
-                      className={`w-full text-left px-4 py-2.5 text-sm ${TEXT_PRIMARY} hover:bg-black/[0.04] dark:hover:bg-white/[0.06] flex items-center gap-2`}
-                    >
-                      <PlusSquare size={15} /> New Calendar
-                    </button>
-                    <button
-                      onClick={handleShare}
-                      className={`w-full text-left px-4 py-2.5 text-sm ${TEXT_PRIMARY} hover:bg-black/[0.04] dark:hover:bg-white/[0.06] flex items-center gap-2`}
-                    >
-                      <Share2 size={15} /> Share Link
-                    </button>
-                    <button
-                      onClick={handleSignOut}
-                      className={`w-full text-left px-4 py-2.5 text-sm ${TEXT_PRIMARY} hover:bg-black/[0.04] dark:hover:bg-white/[0.06] flex items-center gap-2`}
-                    >
-                      <LogOut size={15} /> Sign Out
-                    </button>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
+              <AccountMenu
+                user={user}
+                themePref={themePref}
+                setThemePref={setThemePref}
+                onNewCalendar={handleNewCalendar}
+                onSignOut={handleSignOut}
+              />
+            </div>
+          ) : (
+            <button
+              onClick={handleSignIn}
+              className="shrink-0 text-sm font-semibold text-accent h-9 px-3 rounded-full hover:bg-accent/10 active:scale-95 transition"
+            >
+              Sign in
+            </button>
+          )}
         </div>
       </header>
 
-      <div className="max-w-screen-xl mx-auto px-3 sm:px-6">
-        <div className="flex flex-wrap items-center justify-between gap-3 my-4">
-          <div className="flex items-center gap-2 flex-wrap">
-            <div className="inline-flex bg-black/[0.05] dark:bg-white/[0.08] p-1 rounded-full">
-              <button
-                onClick={() => setView("monthly")}
-                className={`px-4 py-2 sm:py-1.5 text-sm font-semibold rounded-full transition-all duration-150 ${
-                  view === "monthly"
-                    ? `bg-white dark:bg-[#3a3a3c] shadow-sm ${TEXT_PRIMARY}`
-                    : TEXT_SECONDARY
-                }`}
-              >
-                Monthly
-              </button>
-              <button
-                onClick={() => setView("weekly")}
-                className={`px-4 py-2 sm:py-1.5 text-sm font-semibold rounded-full transition-all duration-150 ${
-                  view === "weekly"
-                    ? `bg-white dark:bg-[#3a3a3c] shadow-sm ${TEXT_PRIMARY}`
-                    : TEXT_SECONDARY
-                }`}
-              >
-                Weekly
-              </button>
-            </div>
+      <main className="max-w-5xl mx-auto px-4 sm:px-6 space-y-4">
+        {!user && (
+          <section className={`${CARD} p-5`}>
+            {members.length > 0 && (
+              <div className="flex items-center gap-2.5 mb-3">
+                <span className="flex -space-x-2">
+                  {members.slice(0, 4).map(([uid, m]) => (
+                    <Avatar key={uid} src={m.photoURL} name={m.displayName} size={28} ring />
+                  ))}
+                </span>
+                <span className="text-sm text-muted">
+                  {joinNames(members.map(([, m]) => firstName(m.displayName)))}{" "}
+                  {members.length === 1 ? "has" : "have"} added their times
+                </span>
+              </div>
+            )}
+            <h2 className="text-xl font-bold tracking-tight text-ink">
+              Find a time that works for everyone
+            </h2>
+            <p className="text-[15px] text-muted mt-1">
+              Sign in to add when you're free. Everyone in this calendar sees
+              updates instantly.
+            </p>
+            <button
+              onClick={handleSignIn}
+              className="mt-4 w-full sm:w-auto inline-flex items-center justify-center gap-2.5 h-11 px-5 rounded-full bg-surface border border-hairline text-ink text-[15px] font-semibold shadow-sm hover:bg-overlay active:scale-[0.98] transition"
+            >
+              <GoogleMark /> Continue with Google
+            </button>
+          </section>
+        )}
+
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-1">
+            <Segmented
+              label="Calendar view"
+              value={view}
+              onChange={setView}
+              options={[
+                { value: "weekly", label: "Week" },
+                { value: "monthly", label: "Month" },
+              ]}
+            />
             <button
               onClick={() => setCurrentDate(new Date())}
-              className="text-sm font-semibold text-[#0071e3] hover:bg-[#0071e3]/10 active:bg-[#0071e3]/15 px-3 py-2 sm:py-1.5 rounded-full transition-colors"
+              className={`text-sm font-semibold text-accent h-9 px-3 rounded-full hover:bg-accent/10 active:scale-95 transition ${
+                isViewingToday ? "invisible" : ""
+              }`}
             >
               Today
             </button>
           </div>
-
-          <label className={`flex items-center gap-2 text-sm ${TEXT_SECONDARY} select-none cursor-pointer order-last sm:order-none`}>
-            <span>Full day</span>
-            <input
-              type="checkbox"
-              checked={showFullDay}
-              onChange={() => setShowFullDay(!showFullDay)}
-              className="toggle-checkbox"
+          {user && (
+            <ModeToggle
+              mode={selectionMode}
+              setMode={setSelectionMode}
+              className="hidden sm:grid"
             />
-          </label>
-
-          <ModeToggle
-            mode={selectionMode}
-            setMode={setSelectionMode}
-            className="hidden sm:inline-flex"
-          />
+          )}
         </div>
+
+        {user && mySlots.length === 0 && view === "weekly" && (
+          <p className="text-sm text-muted px-1">
+            Tap the hours you're free. Tap a date for whole-day options.
+          </p>
+        )}
 
         {view === "weekly" ? (
           <WeeklyView
-            currentDate={currentDate}
-            setCurrentDate={setCurrentDate}
-            allUsersAvailability={allUsersAvailability}
-            user={user}
-            handleSlotClick={handleSlotClick}
-            getUsersInSlot={getUsersInSlot}
-            handleDayClick={handleDayClick}
+            weekStart={weekStart}
             today={today}
+            user={user}
+            slotIndex={slotIndex}
+            totalMembers={totalMembers}
             showFullDay={showFullDay}
-            openCopyModal={(date) =>
-              setCopyModalInfo({ isOpen: true, sourceDate: date })
-            }
+            setShowFullDay={setShowFullDay}
+            onPrevWeek={() => setCurrentDate((d) => addDays(d, -7))}
+            onNextWeek={() => setCurrentDate((d) => addDays(d, 7))}
+            onSlotClick={handleSlotClick}
+            onDayClick={handleDayClick}
+            mySlotDays={mySlotDays}
           />
         ) : (
           <MonthlyView
             currentDate={currentDate}
             setCurrentDate={setCurrentDate}
-            allUsersAvailability={allUsersAvailability}
-            setView={setView}
             today={today}
+            dayActivity={dayActivity}
+            bestDateKeys={bestDateKeys}
+            onPickDay={jumpToDay}
           />
         )}
 
-        <footer className="mt-4 space-y-4">
-          {bestTimes.length > 0 && (
-            <div className={`${CARD} p-4`}>
-              <h3 className={`font-bold text-base sm:text-lg mb-3 ${TEXT_PRIMARY}`}>
-                Best Dates to Meet
-              </h3>
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
-                {bestTimes.map((date) => {
-                  const dateString = toDateKey(date);
-                  const note = eventNotes[dateString]?.text;
-                  const isExpanded = expandedNoteDate === dateString;
-                  return (
-                    <div
-                      key={dateString}
-                      className="bg-green-500/[0.08] dark:bg-green-500/[0.12] text-green-800 dark:text-green-400 p-3 rounded-2xl border border-green-500/20"
-                    >
-                      <div className="flex justify-between items-center gap-2">
-                        <span className="text-sm font-semibold">
-                          {date.toLocaleString(undefined, {
-                            weekday: "long",
-                            month: "long",
-                            day: "numeric",
-                          })}
-                        </span>
-                        <div className="flex items-center gap-1 shrink-0">
-                          <button
-                            onClick={() =>
-                              isExpanded
-                                ? closeNoteEditor()
-                                : openNoteEditor(dateString)
-                            }
-                            title={note ? "Edit note" : "Add a note"}
-                            className="p-1.5 hover:bg-green-500/15 rounded-full transition-colors"
-                          >
-                            {note ? (
-                              <Pencil size={14} />
-                            ) : (
-                              <StickyNote size={14} />
-                            )}
-                          </button>
-                          <button
-                            onClick={() => generateGoogleCalendarLink(date)}
-                            title="Add to Google Calendar"
-                            className="p-1.5 hover:bg-green-500/15 rounded-full transition-colors"
-                          >
-                            <CalendarPlus size={14} />
-                          </button>
-                        </div>
-                      </div>
-
-                      {note && !isExpanded && (
-                        <p className="text-xs opacity-80 mt-1.5 break-words">
-                          {note}
-                        </p>
-                      )}
-
-                      {isExpanded && (
-                        <div className="mt-2 space-y-2">
-                          <textarea
-                            value={noteDraft}
-                            onChange={(e) => setNoteDraft(e.target.value)}
-                            placeholder="What's the plan? (e.g. Dinner at Mike's, 7pm)"
-                            maxLength={140}
-                            rows={2}
-                            className="w-full text-xs p-2 rounded-lg border border-green-500/25 bg-white dark:bg-[#131316] text-[#1d1d1f] dark:text-white focus:outline-none focus:ring-2 focus:ring-green-500/40 resize-none"
-                            autoFocus
-                          />
-                          <div className="flex justify-end gap-2">
-                            <button
-                              onClick={closeNoteEditor}
-                              className="p-1.5 hover:bg-green-500/15 rounded-full text-green-700 dark:text-green-400 transition-colors"
-                              aria-label="Cancel"
-                            >
-                              <X size={14} />
-                            </button>
-                            <button
-                              onClick={() => saveEventNote(dateString)}
-                              className="p-1.5 bg-green-600 hover:bg-green-700 rounded-full text-white transition-colors"
-                              aria-label="Save note"
-                            >
-                              <Check size={14} />
-                            </button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          <div className={`${CARD} p-4`}>
-            <h3 className={`font-bold text-base sm:text-lg mb-3 ${TEXT_PRIMARY}`}>
-              Group Members ({totalMembers})
-            </h3>
-            {totalMembers === 0 ? (
-              <p className={`text-sm ${TEXT_SECONDARY}`}>
-                No one's marked their availability yet. Share the link to get
-                started!
-              </p>
-            ) : (
-              <div className="flex flex-wrap gap-4">
-                {Object.entries(allUsersAvailability).map(([uid, u]) => (
-                  <div key={uid} className="flex items-center gap-2">
-                    <img
-                      src={u.photoURL}
-                      alt={u.displayName}
-                      className="h-8 w-8 rounded-full object-cover"
-                    />
-                    <span className={`font-semibold text-sm ${TEXT_PRIMARY}`}>
-                      {u.displayName}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <div className={`text-center text-xs ${TEXT_SECONDARY} pt-2`}>
-            <p>
-              All times are shown in your local timezone:{" "}
-              {Intl.DateTimeFormat().resolvedOptions().timeZone}
-            </p>
-          </div>
-        </footer>
-      </div>
-
-      {/* Mobile-only floating availability toggle, kept within thumb's reach */}
-      <div
-        className="sm:hidden fixed bottom-0 inset-x-0 z-40 flex justify-center pointer-events-none"
-        style={{
-          paddingBottom: "calc(0.75rem + env(safe-area-inset-bottom))",
-          paddingTop: "0.5rem",
-        }}
-      >
-        <ModeToggle
-          mode={selectionMode}
-          setMode={setSelectionMode}
-          className="pointer-events-auto shadow-[0_8px_30px_rgba(0,0,0,0.12)] dark:shadow-[0_8px_30px_rgba(0,0,0,0.5)]"
+        <BestTimes
+          bestTimes={bestTimes}
+          totalMembers={totalMembers}
+          eventNotes={eventNotes}
+          canEditNotes={!!user}
+          onEditNoteRequest={handleSignIn}
+          onSaveNote={saveEventNote}
+          onAddToCalendar={addToGoogleCalendar}
+          onJumpTo={jumpToDay}
+          onInvite={user ? handleShare : null}
         />
-      </div>
 
-      {notification && (
+        <section className={`${CARD} p-4`}>
+          <h3 className="text-base font-bold text-ink">
+            People <span className="text-muted font-semibold tabular-nums">{totalMembers}</span>
+          </h3>
+          {totalMembers === 0 ? (
+            <p className="text-sm text-muted mt-2">
+              No one's added their times yet.
+            </p>
+          ) : (
+            <ul className="mt-3 flex flex-wrap gap-2">
+              {members.map(([uid, m]) => (
+                <li
+                  key={uid}
+                  className="inline-flex items-center gap-2 h-9 pl-1 pr-3 rounded-full bg-overlay"
+                >
+                  <Avatar src={m.photoURL} name={m.displayName} size={28} />
+                  <span className="text-sm font-medium text-ink">
+                    {firstName(m.displayName)}
+                    {uid === user?.uid && <span className="text-muted"> (you)</span>}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+
+        <p className="text-center text-xs text-muted pt-1">
+          Times shown in your timezone ·{" "}
+          {Intl.DateTimeFormat().resolvedOptions().timeZone.replace(/_/g, " ")}
+        </p>
+      </main>
+
+      {/* Phone: the free/busy switch lives in thumb reach. */}
+      {user && (
         <div
-          key={notification}
-          className="fixed bottom-24 sm:bottom-5 left-1/2 -translate-x-1/2 sm:left-auto sm:translate-x-0 sm:right-5 bg-[#1d1d1f] dark:bg-white text-white dark:text-[#1d1d1f] py-2.5 px-4 rounded-full shadow-lg animate-fade-in-out text-sm max-w-[90vw] text-center z-50">
-          {notification}
+          className="sm:hidden fixed bottom-0 inset-x-0 z-40 flex justify-center pointer-events-none px-4"
+          style={{ paddingBottom: "calc(0.75rem + env(safe-area-inset-bottom))" }}
+        >
+          <ModeToggle
+            mode={selectionMode}
+            setMode={setSelectionMode}
+            className="pointer-events-auto bg-surface/90 backdrop-blur-xl border border-hairline shadow-float"
+          />
         </div>
       )}
-      <style>{` @keyframes fade-in-out { 0%, 100% { opacity: 0; transform: translateY(10px); } 10%, 90% { opacity: 1; transform: translateY(0); } } .animate-fade-in-out { animation: fade-in-out 3s ease-in-out forwards; } .toggle-checkbox { appearance: none; width: 3rem; height: 1.5rem; background-color: rgba(0,0,0,0.1); border-radius: 9999px; position: relative; cursor: pointer; transition: background-color 0.2s ease-in-out; flex-shrink: 0; } html.dark .toggle-checkbox { background-color: rgba(255,255,255,0.16); } .toggle-checkbox:checked { background-color: #0071e3; } .toggle-checkbox::before { content: ''; position: absolute; width: 1.25rem; height: 1.25rem; background-color: white; border-radius: 9999px; top: 0.125rem; left: 0.125rem; transition: transform 0.2s ease-in-out; box-shadow: 0 1px 2px rgba(0,0,0,0.2); } .toggle-checkbox:checked::before { transform: translateX(1.5rem); } `}</style>
+
+      <div
+        role="status"
+        aria-live="polite"
+        className="fixed inset-x-0 z-50 flex justify-center px-4 pointer-events-none bottom-[calc(5rem+env(safe-area-inset-bottom))] sm:bottom-6"
+      >
+        {toast && (
+          <div
+            key={toast.id}
+            className="pointer-events-auto flex items-center gap-3 max-w-md bg-ink text-surface text-sm font-medium pl-4 pr-2 py-2 min-h-[44px] rounded-full shadow-float animate-toast-in"
+          >
+            <span className={toast.action ? "" : "pr-2"}>{toast.message}</span>
+            {toast.action && (
+              <button
+                onClick={() => {
+                  setToast(null);
+                  toast.action.onClick();
+                }}
+                className="shrink-0 h-8 px-3 rounded-full font-semibold text-accent bg-surface/10 hover:bg-surface/20 active:scale-95 transition"
+              >
+                {toast.action.label}
+              </button>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 };
