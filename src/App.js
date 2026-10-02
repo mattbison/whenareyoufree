@@ -1,4 +1,10 @@
-import React, { useState, useEffect, useMemo, useRef } from "react";
+import React, {
+  useState,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+} from "react";
 import "./styles.css";
 import { initializeApp } from "firebase/app";
 import {
@@ -53,6 +59,24 @@ const TEXT_SECONDARY = "text-[#6e6e73] dark:text-[#98989d]";
 const ICON_BTN =
   "p-2.5 rounded-full hover:bg-black/[0.05] dark:hover:bg-white/[0.08] active:bg-black/[0.08] dark:active:bg-white/[0.12] transition-colors";
 
+// --- Date helpers ---
+
+// "YYYY-MM-DD" for the *local* calendar day. Slot and note IDs are keyed on
+// this. Never use toISOString() for this: it converts to UTC, which shifts the
+// date by a day in the evening (west of UTC) or all morning (east of UTC).
+const toDateKey = (date) => {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+};
+
+const addDays = (date, days) => {
+  const d = new Date(date);
+  d.setDate(d.getDate() + days);
+  return d;
+};
+
 // --- Small shared UI helpers ---
 
 const ModeToggle = ({ mode, setMode, className = "" }) => (
@@ -106,6 +130,7 @@ const WeeklyView = ({
         .fill(0)
         .map((_, i) => {
           const d = new Date(currentDate);
+          d.setHours(0, 0, 0, 0);
           d.setDate(d.getDate() - d.getDay() + i);
           return d;
         }),
@@ -119,29 +144,44 @@ const WeeklyView = ({
     return showFullDay ? allHours : allHours.slice(8);
   }, [showFullDay]);
 
+  // Hour rows snap to the top of the grid, so reserve room for the sticky
+  // day header; otherwise every snap tucks the top row underneath it.
+  useLayoutEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    const syncScrollPadding = () => {
+      const headerHeight =
+        container.querySelector("[data-day]")?.offsetHeight || 0;
+      container.style.scrollPaddingTop = `${headerHeight}px`;
+    };
+    syncScrollPadding();
+    window.addEventListener("resize", syncScrollPadding);
+    return () => window.removeEventListener("resize", syncScrollPadding);
+  }, []);
+
   // When "Full Day" is switched on, jump the scroll position to a sensible
-  // waking hour instead of dropping the user at midnight.
+  // waking hour instead of dropping the user at midnight. Scrolls only the
+  // grid container (scrollIntoView would also scroll the page).
   useEffect(() => {
-    if (showFullDay && scrollContainerRef.current) {
-      const target = scrollContainerRef.current.querySelector(
-        '[data-hour="08"]'
-      );
-      if (target) {
-        target.scrollIntoView({ block: "start" });
-      }
+    const container = scrollContainerRef.current;
+    if (!showFullDay || !container) return;
+    const target = container.querySelector('[data-hour="08"]');
+    if (target) {
+      const headerHeight =
+        container.querySelector("[data-day]")?.offsetHeight || 0;
+      container.scrollTop = target.offsetTop - headerHeight;
     }
   }, [showFullDay]);
 
   // Always land on today's column instead of making mobile users swipe
   // over from Sunday. No-ops safely when today isn't in the visible week.
   useEffect(() => {
-    if (!scrollContainerRef.current) return;
-    const todayDateString = today.toISOString().split("T")[0];
-    const target = scrollContainerRef.current.querySelector(
-      `[data-day="${todayDateString}"]`
-    );
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    const target = container.querySelector(`[data-day="${toDateKey(today)}"]`);
     if (target) {
-      target.scrollIntoView({ inline: "start", block: "nearest" });
+      const timeColumnWidth = container.querySelector("[data-hour]")?.offsetWidth || 0;
+      container.scrollLeft = target.offsetLeft - timeColumnWidth;
     }
   }, [daysOfWeek, today]);
 
@@ -149,9 +189,7 @@ const WeeklyView = ({
     <div className={`${CARD} overflow-hidden`}>
       <div className="flex justify-between items-center p-3 sm:p-4 border-b border-black/[0.06] dark:border-white/[0.08]">
         <button
-          onClick={() =>
-            setCurrentDate((d) => new Date(d.setDate(d.getDate() - 7)))
-          }
+          onClick={() => setCurrentDate((d) => addDays(d, -7))}
           className={`${ICON_BTN} ${TEXT_PRIMARY}`}
           aria-label="Previous week"
         >
@@ -170,9 +208,7 @@ const WeeklyView = ({
           })}
         </h2>
         <button
-          onClick={() =>
-            setCurrentDate((d) => new Date(d.setDate(d.getDate() + 7)))
-          }
+          onClick={() => setCurrentDate((d) => addDays(d, 7))}
           className={`${ICON_BTN} ${TEXT_PRIMARY}`}
           aria-label="Next week"
         >
@@ -182,18 +218,18 @@ const WeeklyView = ({
 
       <div
         ref={scrollContainerRef}
-        className="overflow-auto snap-y snap-proximity"
+        className="relative overflow-auto snap-y snap-proximity"
         style={{ maxHeight: "calc(100vh - 380px)" }}
       >
         <div
           className="grid grid-cols-[auto_repeat(7,1fr)]"
           style={{ minWidth: "640px" }}
         >
-          <div className="sticky top-0 left-0 bg-white dark:bg-[#1c1c1e] z-10"></div>
+          <div className="sticky top-0 left-0 bg-white dark:bg-[#1c1c1e] z-20"></div>
           {daysOfWeek.map((day, i) => {
             const isPast = day < today;
             const isToday = day.toDateString() === new Date().toDateString();
-            const dayString = day.toISOString().split("T")[0];
+            const dayString = toDateKey(day);
             const hasUserSlots =
               user &&
               allUsersAvailability[user.uid]?.slots.some((s) =>
@@ -258,8 +294,7 @@ const WeeklyView = ({
                 const totalUsersInGroup =
                   Object.keys(allUsersAvailability).length;
                 const isCurrentUserInSlot =
-                  user &&
-                  usersInSlot.some((u) => u.displayName === user.displayName);
+                  user && usersInSlot.some((u) => u.uid === user.uid);
                 const isAnyoneUnavailable = usersInSlot.some(
                   (u) => u.type === "unavailable"
                 );
@@ -295,9 +330,9 @@ const WeeklyView = ({
                       {usersInSlot
                         .filter((u) => u.type === "available")
                         .slice(0, 3)
-                        .map((u, i) => (
+                        .map((u) => (
                           <img
-                            key={i}
+                            key={u.uid}
                             src={u.photoURL}
                             alt={u.displayName}
                             title={u.displayName}
@@ -364,7 +399,7 @@ const MonthlyView = ({
     return days;
   }, [month, year, daysInMonth, firstDayOfMonth]);
   const dayHasActivity = (day) => {
-    const dayString = day.toISOString().split("T")[0];
+    const dayString = toDateKey(day);
     const activity = { available: false, unavailable: false };
     Object.values(allUsersAvailability).forEach((userData) => {
       userData.slots?.forEach((slot) => {
@@ -512,12 +547,12 @@ const CopyScheduleModal = ({ sourceDate, onApply, onCancel }) => {
               <option value="month">
                 Every{" "}
                 {sourceDate.toLocaleDateString(undefined, { weekday: "long" })}{" "}
-                this month
+                for the next month
               </option>
               <option value="3months">
                 Every{" "}
                 {sourceDate.toLocaleDateString(undefined, { weekday: "long" })}{" "}
-                for 3 months
+                for the next 3 months
               </option>
             </select>
           </div>
@@ -610,6 +645,16 @@ const App = () => {
     d.setHours(0, 0, 0, 0);
     return d;
   }, []);
+
+  // Single toast timer so a new message isn't cut short by an older one's
+  // timeout. Duration matches the fade-in-out animation.
+  const notificationTimerRef = useRef(null);
+  const notify = (message) => {
+    clearTimeout(notificationTimerRef.current);
+    setNotification(message);
+    notificationTimerRef.current = setTimeout(() => setNotification(""), 3000);
+  };
+  useEffect(() => () => clearTimeout(notificationTimerRef.current), []);
 
   // Remember the person's last-used view / mode / full-day preference locally.
   useEffect(() => {
@@ -742,6 +787,32 @@ const App = () => {
     setIsProfileOpen(false);
   };
 
+  // Writes the signed-in user's full slot list (or removes them from the
+  // group when it's empty). Returns false and shows a toast on failure.
+  const saveMySlots = async (slots) => {
+    const userDocRef = doc(db, "groups", groupId, "availability", user.uid);
+    try {
+      if (slots.length === 0) {
+        await deleteDoc(userDocRef);
+      } else {
+        await setDoc(
+          userDocRef,
+          {
+            slots,
+            displayName: user.displayName,
+            photoURL: user.photoURL,
+          },
+          { merge: true }
+        );
+      }
+      return true;
+    } catch (error) {
+      console.error("Error saving availability:", error);
+      notify("Couldn't save your changes — check your connection.");
+      return false;
+    }
+  };
+
   const handleSlotClick = async (day, time) => {
     if (day < today) return;
     if (!user) {
@@ -749,17 +820,18 @@ const App = () => {
       return;
     }
     if (!db || !groupId) return;
-    const slotId = `${day.toISOString().split("T")[0]}T${time}`;
-    const usersInSlot = getUsersInSlot(day, time);
-    const unavailableUser = usersInSlot.find((u) => u.type === "unavailable");
-    if (unavailableUser && unavailableUser.displayName !== user.displayName) {
-      setNotification("This slot is blocked by another user.");
-      setTimeout(() => setNotification(""), 2000);
-      return;
-    }
-    const userDocRef = doc(db, "groups", groupId, "availability", user.uid);
+    const slotId = `${toDateKey(day)}T${time}`;
     const currentUserData = allUsersAvailability[user.uid] || { slots: [] };
     const existingSlot = currentUserData.slots.find((s) => s.id === slotId);
+    // Someone else blocking a slot stops you adding to it, but you can always
+    // change or clear your own entry.
+    const blockedByOther = getUsersInSlot(day, time).some(
+      (u) => u.type === "unavailable" && u.uid !== user.uid
+    );
+    if (blockedByOther && !existingSlot) {
+      notify("This slot is blocked by another user.");
+      return;
+    }
     let newSlots;
     if (existingSlot) {
       if (existingSlot.type === selectionMode) {
@@ -775,19 +847,7 @@ const App = () => {
         { id: slotId, type: selectionMode },
       ];
     }
-    if (newSlots.length === 0) {
-      await deleteDoc(userDocRef);
-    } else {
-      await setDoc(
-        userDocRef,
-        {
-          slots: newSlots,
-          displayName: user.displayName,
-          photoURL: user.photoURL,
-        },
-        { merge: true }
-      );
-    }
+    await saveMySlots(newSlots);
   };
 
   const handleDayClick = async (day) => {
@@ -797,15 +857,19 @@ const App = () => {
       return;
     }
     if (!db || !groupId) return;
-    const dayString = day.toISOString().split("T")[0];
-    const userDocRef = doc(db, "groups", groupId, "availability", user.uid);
+    const dayString = toDateKey(day);
     const currentUserData = allUsersAvailability[user.uid] || { slots: [] };
     const otherDaySlots = currentUserData.slots.filter(
       (slot) => !slot.id.startsWith(dayString)
     );
+    const thisDaySlots = currentUserData.slots.filter((slot) =>
+      slot.id.startsWith(dayString)
+    );
+    // Only toggle off when the whole day is already in the *current* mode;
+    // otherwise (e.g. all-available while in Unavailable mode) switch it over.
     const isDayAlreadySelected =
-      currentUserData.slots.filter((slot) => slot.id.startsWith(dayString))
-        .length === 24;
+      thisDaySlots.length === 24 &&
+      thisDaySlots.every((slot) => slot.type === selectionMode);
     let finalSlots;
     if (isDayAlreadySelected) {
       finalSlots = otherDaySlots;
@@ -818,25 +882,13 @@ const App = () => {
         });
       finalSlots = [...otherDaySlots, ...newDaySlots];
     }
-    if (finalSlots.length === 0) {
-      await deleteDoc(userDocRef);
-    } else {
-      await setDoc(
-        userDocRef,
-        {
-          slots: finalSlots,
-          displayName: user.displayName,
-          photoURL: user.photoURL,
-        },
-        { merge: true }
-      );
-    }
+    await saveMySlots(finalSlots);
   };
 
   const handleApplyCopy = async ({ sourceDate, duration, overwrite }) => {
     if (!user || !db || !groupId) return;
 
-    const sourceDayString = sourceDate.toISOString().split("T")[0];
+    const sourceDayString = toDateKey(sourceDate);
     const sourceSlots = (allUsersAvailability[user.uid]?.slots || []).filter(
       (s) => s.id.startsWith(sourceDayString)
     );
@@ -861,88 +913,84 @@ const App = () => {
     let finalSlots = [...currentUserData.slots];
 
     if (overwrite) {
-      const targetDateStrings = targetDates.map(
-        (d) => d.toISOString().split("T")[0]
-      );
+      const targetDateStrings = targetDates.map(toDateKey);
       finalSlots = finalSlots.filter(
         (slot) =>
           !targetDateStrings.some((dateStr) => slot.id.startsWith(dateStr))
       );
     }
 
+    // Without overwrite, keep existing entries and skip ones already present
+    // so the same slot never appears twice (which would double-count it).
+    const existingIds = new Set(finalSlots.map((slot) => slot.id));
     targetDates.forEach((date) => {
-      const targetDayString = date.toISOString().split("T")[0];
+      const targetDayString = toDateKey(date);
       sourceSlots.forEach((sourceSlot) => {
         const time = sourceSlot.id.split("T")[1];
-        finalSlots.push({
-          id: `${targetDayString}T${time}`,
-          type: sourceSlot.type,
-        });
+        const id = `${targetDayString}T${time}`;
+        if (existingIds.has(id)) return;
+        existingIds.add(id);
+        finalSlots.push({ id, type: sourceSlot.type });
       });
     });
 
-    const userDocRef = doc(db, "groups", groupId, "availability", user.uid);
-    await setDoc(
-      userDocRef,
-      {
-        slots: finalSlots,
-        displayName: user.displayName,
-        photoURL: user.photoURL,
-      },
-      { merge: true }
-    );
+    if (!(await saveMySlots(finalSlots))) return;
 
     setCopyModalInfo({ isOpen: false, sourceDate: null });
-    setNotification("Schedule copied successfully!");
-    setTimeout(() => setNotification(""), 2000);
+    notify("Schedule copied successfully!");
   };
 
   const getUsersInSlot = (day, time) => {
-    const slotId = `${day.toISOString().split("T")[0]}T${time}`;
-    return Object.values(allUsersAvailability)
-      .flatMap(
-        (userData) =>
-          userData.slots
-            ?.filter((s) => s.id === slotId)
-            .map((s) => ({ ...userData, type: s.type })) || []
-      )
-      .map((userData) => ({
-        displayName: userData.displayName,
-        photoURL: userData.photoURL,
-        type: userData.type,
-      }));
+    const slotId = `${toDateKey(day)}T${time}`;
+    return Object.entries(allUsersAvailability).flatMap(([uid, userData]) => {
+      const slot = userData.slots?.find((s) => s.id === slotId);
+      return slot
+        ? [
+            {
+              uid,
+              displayName: userData.displayName,
+              photoURL: userData.photoURL,
+              type: slot.type,
+            },
+          ]
+        : [];
+    });
   };
 
   // Dates where every current group member has marked themselves available
   // for at least one hour, excluding dates that have already passed.
   const bestTimes = useMemo(() => {
-    const slots = {};
-    const totalUsers = Object.keys(allUsersAvailability).length;
-    if (totalUsers === 0) return [];
-    Object.values(allUsersAvailability).forEach((userData) => {
-      userData.slots?.forEach((slot) => {
-        if (slot.type === "available") {
-          slots[slot.id] = (slots[slot.id] || 0) + 1;
-        } else {
-          slots[slot.id] = -1;
-        }
+    const members = Object.values(allUsersAvailability);
+    if (members.length === 0) return [];
+    const availableCounts = {};
+    members.forEach((userData) => {
+      // De-dupe per person so a repeated slot can't count twice.
+      new Set(
+        (userData.slots || [])
+          .filter((slot) => slot.type === "available")
+          .map((slot) => slot.id)
+      ).forEach((id) => {
+        availableCounts[id] = (availableCounts[id] || 0) + 1;
       });
     });
-    const bestHourlySlots = Object.entries(slots)
-      .filter(([id, count]) => count === totalUsers)
-      .map(([id]) => id.split("T")[0]);
-    const uniqueDates = [...new Set(bestHourlySlots)];
-    return uniqueDates
-      .map((dateString) => new Date(dateString.replace(/-/g, "/")))
-      .filter((date) => date >= today)
-      .sort((a, b) => a - b);
+    const todayKey = toDateKey(today);
+    const dateKeys = new Set(
+      Object.entries(availableCounts)
+        .filter(([, count]) => count === members.length)
+        .map(([id]) => id.split("T")[0])
+        .filter((dateKey) => dateKey >= todayKey)
+    );
+    return [...dateKeys].sort().map((dateKey) => {
+      const [y, m, d] = dateKey.split("-").map(Number);
+      return new Date(y, m - 1, d);
+    });
   }, [allUsersAvailability, today]);
 
   const copyShareLink = () => {
-    navigator.clipboard.writeText(window.location.href).then(() => {
-      setNotification("Share link copied!");
-      setTimeout(() => setNotification(""), 2000);
-    });
+    navigator.clipboard
+      .writeText(window.location.href)
+      .then(() => notify("Share link copied!"))
+      .catch(() => notify("Couldn't copy — copy the address bar instead."));
   };
 
   const handleShare = async () => {
@@ -979,15 +1027,14 @@ const App = () => {
     const endDate = `${d2.getFullYear()}${T(d2.getMonth() + 1)}${T(
       d2.getDate()
     )}`;
-    const dateString = d.toISOString().split("T")[0];
-    const noteText = eventNotes[dateString]?.text;
+    const noteText = eventNotes[toDateKey(d)]?.text;
     const details = noteText
       ? `${noteText} (Plan created using WhenAreYouFree.com)`
       : "Plan created using WhenAreYouFree.com";
     const url = `https://www.google.com/calendar/render?action=TEMPLATE&text=Hangout+with+Friends&dates=${startDate}/${endDate}&details=${encodeURIComponent(
       details
     )}`;
-    window.open(url, "_blank");
+    window.open(url, "_blank", "noopener");
   };
 
   const openNoteEditor = (dateString) => {
@@ -1025,8 +1072,7 @@ const App = () => {
       closeNoteEditor();
     } catch (error) {
       console.error("Error saving event note:", error);
-      setNotification("Couldn't save the note — check your connection.");
-      setTimeout(() => setNotification(""), 2500);
+      notify("Couldn't save the note — check your connection.");
     }
   };
 
@@ -1225,7 +1271,7 @@ const App = () => {
               </h3>
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
                 {bestTimes.map((date) => {
-                  const dateString = date.toISOString().split("T")[0];
+                  const dateString = toDateKey(date);
                   const note = eventNotes[dateString]?.text;
                   const isExpanded = expandedNoteDate === dateString;
                   return (
@@ -1320,8 +1366,8 @@ const App = () => {
               </p>
             ) : (
               <div className="flex flex-wrap gap-4">
-                {Object.values(allUsersAvailability).map((u) => (
-                  <div key={u.displayName} className="flex items-center gap-2">
+                {Object.entries(allUsersAvailability).map(([uid, u]) => (
+                  <div key={uid} className="flex items-center gap-2">
                     <img
                       src={u.photoURL}
                       alt={u.displayName}
@@ -1361,7 +1407,9 @@ const App = () => {
       </div>
 
       {notification && (
-        <div className="fixed bottom-24 sm:bottom-5 left-1/2 -translate-x-1/2 sm:left-auto sm:translate-x-0 sm:right-5 bg-[#1d1d1f] dark:bg-white text-white dark:text-[#1d1d1f] py-2.5 px-4 rounded-full shadow-lg animate-fade-in-out text-sm max-w-[90vw] text-center z-50">
+        <div
+          key={notification}
+          className="fixed bottom-24 sm:bottom-5 left-1/2 -translate-x-1/2 sm:left-auto sm:translate-x-0 sm:right-5 bg-[#1d1d1f] dark:bg-white text-white dark:text-[#1d1d1f] py-2.5 px-4 rounded-full shadow-lg animate-fade-in-out text-sm max-w-[90vw] text-center z-50">
           {notification}
         </div>
       )}
